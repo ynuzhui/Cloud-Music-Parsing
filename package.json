@@ -1,0 +1,30 @@
+{
+  "name": "music-parser-frontend",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 0.0.0.0 --port 8099",
+    "build": "vue-tsc --noEmit && vite build",
+    "preview": "vite preview --host 0.0.0.0 --port 8099"
+  },
+  "dependencies": {
+    "@vicons/tabler": "^0.13.0",
+    "@vueuse/motion": "^3.0.3",
+    "aplayer": "^1.10.1",
+    "axios": "^1.8.4",
+    "browser-id3-writer": "^6.3.1",
+    "jszip": "^3.10.1",
+    "naive-ui": "^2.42.0",
+    "pinia": "^2.2.8",
+    "vue": "^3.5.13",
+    "vue-router": "^4.5.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.10",
+    "@vitejs/plugin-vue": "^5.2.1",
+    "typescript": "^5.8.2",
+    "vite": "^6.2.0",
+    "vue-tsc": "^2.2.8"
+  }
+}

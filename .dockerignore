@@ -1,0 +1,9 @@
+node_modules
+dist
+data
+backend/data
+.git
+.gitignore
+*.log
+启动开发.ps1
+构建独立版.ps1

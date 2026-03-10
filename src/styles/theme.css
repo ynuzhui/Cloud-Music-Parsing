@@ -1,0 +1,65 @@
+﻿@import url("https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Noto+Sans+SC:wght@400;500;700&display=swap");
+
+:root {
+  --bg-1: #f4f8ff;
+  --bg-2: #ecf2ff;
+  --bg-3: #fdf7f0;
+  --card-bg: rgba(255, 255, 255, 0.82);
+  --line-soft: rgba(22, 36, 71, 0.1);
+  --text-1: #162447;
+  --text-2: #4a5e8d;
+  --brand: #0f6fff;
+  --brand-soft: #dce9ff;
+  --brand-deep: #0d4ed8;
+  --ok: #00a36f;
+  --warn: #ff7a28;
+
+  --song-item-bg: rgba(245, 248, 255, 0.7);
+  --song-item-hover: rgba(220, 233, 255, 0.5);
+  --song-item-border: rgba(20, 41, 78, 0.05);
+  --result-card-bg: rgba(240, 253, 244, 0.6);
+  --result-card-border: rgba(16, 185, 129, 0.2);
+  --modal-bg: #ffffff;
+  --modal-overlay: rgba(10, 20, 40, 0.38);
+  --settings-bg: rgba(255, 255, 255, 0.82);
+  --settings-overlay: rgba(6, 16, 36, 0.42);
+  --settings-border: rgba(20, 40, 70, 0.08);
+  --tag-bg: rgba(15, 111, 255, 0.08);
+  --tag-active-bg: var(--brand);
+  --tag-active-text: #fff;
+  --tag-text: var(--text-1);
+  --scrollbar-thumb: rgba(15, 111, 255, 0.25);
+  --scrollbar-track: transparent;
+}
+
+[data-theme="dark"] {
+  --bg-1: #0f1724;
+  --bg-2: #141d2e;
+  --bg-3: #1a1f2e;
+  --card-bg: rgba(22, 32, 52, 0.82);
+  --line-soft: rgba(255, 255, 255, 0.08);
+  --text-1: #e4eaf4;
+  --text-2: #8b9dc3;
+  --brand: #4d94ff;
+  --brand-soft: rgba(77, 148, 255, 0.15);
+  --brand-deep: #3a7bff;
+  --ok: #00c986;
+  --warn: #ff9a52;
+
+  --song-item-bg: rgba(30, 42, 66, 0.7);
+  --song-item-hover: rgba(40, 58, 90, 0.7);
+  --song-item-border: rgba(255, 255, 255, 0.05);
+  --result-card-bg: rgba(16, 52, 38, 0.4);
+  --result-card-border: rgba(0, 201, 134, 0.2);
+  --modal-bg: #1a2436;
+  --modal-overlay: rgba(5, 10, 20, 0.6);
+  --settings-bg: rgba(26, 36, 54, 0.9);
+  --settings-overlay: rgba(5, 10, 20, 0.72);
+  --settings-border: rgba(255, 255, 255, 0.08);
+  --tag-bg: rgba(77, 148, 255, 0.12);
+  --tag-active-bg: var(--brand);
+  --tag-active-text: #fff;
+  --tag-text: var(--text-1);
+  --scrollbar-thumb: rgba(77, 148, 255, 0.3);
+  --scrollbar-track: transparent;
+}

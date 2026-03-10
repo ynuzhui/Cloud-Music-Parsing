@@ -1,0 +1,26 @@
+﻿<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="icon" type="image/svg+xml" href="./src/assets/logo-yunyin-icon.svg" />
+    <title>Cloud Music Parsing</title>
+    <script>
+      (function () {
+        try {
+          var raw = localStorage.getItem("mp_settings");
+          if (!raw) return;
+          var parsed = JSON.parse(raw);
+          var cachedSiteName = typeof parsed.siteName === "string" ? parsed.siteName.trim() : "";
+          if (cachedSiteName) document.title = cachedSiteName;
+        } catch (err) {
+          // ignore
+        }
+      })();
+    </script>
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

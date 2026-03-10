@@ -1,0 +1,38 @@
+﻿# Dependencies and build outputs
+node_modules/
+dist/
+backend/cmd/server/webdist/
+
+# Runtime data and local config
+data/
+backend/data/
+.env
+.env.local
+.env.*.local
+
+# Logs and temporary files
+*.log
+tmp/
+temp/
+tmpdata-*
+
+# Local binaries and archives
+*.exe
+*.dll
+*.so
+*.dylib
+*.zip
+*.tar
+*.gz
+
+# IDE and OS metadata
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Local helper scripts (do not publish)
+启动开发.ps1
+构建独立版.ps1
+start-dev.ps1
+build-standalone-win.ps1

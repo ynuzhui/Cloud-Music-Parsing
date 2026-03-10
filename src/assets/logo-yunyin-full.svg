@@ -1,0 +1,65 @@
+﻿<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 360" role="img" aria-labelledby="logoTitle logoDesc">
+  <title id="logoTitle">&#20113;&#38899;&#35299;&#26512; Logo</title>
+  <desc id="logoDesc">&#20197;&#20113;&#26421;&#12289;&#38899;&#31526;&#21644;&#35299;&#26512;&#27874;&#24418;&#20026;&#26680;&#24515;&#20803;&#32032;&#30340;&#32593;&#31449;&#26631;&#35782;</desc>
+  <defs>
+    <linearGradient id="panelGrad" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#0f6fff"/>
+      <stop offset="58%" stop-color="#1f88ff"/>
+      <stop offset="100%" stop-color="#2dc2ff"/>
+    </linearGradient>
+    <radialGradient id="haloGrad" cx="18%" cy="15%" r="75%">
+      <stop offset="0%" stop-color="#ffffff" stop-opacity="0.35"/>
+      <stop offset="100%" stop-color="#ffffff" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="cloudGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#ffffff"/>
+      <stop offset="100%" stop-color="#e7f1ff"/>
+    </linearGradient>
+    <linearGradient id="noteGrad" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#ffd489"/>
+      <stop offset="100%" stop-color="#ff7a28"/>
+    </linearGradient>
+    <linearGradient id="waveGrad" x1="0" y1="1" x2="1" y2="0">
+      <stop offset="0%" stop-color="#6db5ff"/>
+      <stop offset="100%" stop-color="#ffffff"/>
+    </linearGradient>
+    <filter id="softShadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="10" stdDeviation="12" flood-color="#0f3f96" flood-opacity="0.22"/>
+    </filter>
+  </defs>
+
+  <g transform="translate(30 30)">
+    <g filter="url(#softShadow)">
+      <rect x="0" y="0" width="300" height="300" rx="72" fill="url(#panelGrad)"/>
+      <rect x="1.5" y="1.5" width="297" height="297" rx="70.5" fill="none" stroke="#ffffff" stroke-opacity="0.2" stroke-width="3"/>
+      <rect x="0" y="0" width="300" height="300" rx="72" fill="url(#haloGrad)"/>
+    </g>
+
+    <g opacity="0.92">
+      <circle cx="98" cy="156" r="44" fill="url(#cloudGrad)"/>
+      <circle cx="140" cy="132" r="53" fill="url(#cloudGrad)"/>
+      <circle cx="188" cy="156" r="39" fill="url(#cloudGrad)"/>
+      <rect x="82" y="158" width="132" height="50" rx="25" fill="url(#cloudGrad)"/>
+    </g>
+
+    <path d="M92 126 h-18 c-6 0-11 5-11 11v48c0 6 5 11 11 11h18" fill="none" stroke="#d9ecff" stroke-width="6" stroke-linecap="round"/>
+    <path d="M208 126 h18 c6 0 11 5 11 11v48c0 6-5 11-11 11h-18" fill="none" stroke="#d9ecff" stroke-width="6" stroke-linecap="round"/>
+
+    <g fill="url(#waveGrad)">
+      <rect x="108" y="172" width="10" height="30" rx="5"/>
+      <rect x="124" y="164" width="10" height="46" rx="5"/>
+      <rect x="140" y="156" width="10" height="62" rx="5"/>
+      <rect x="156" y="164" width="10" height="46" rx="5"/>
+      <rect x="172" y="172" width="10" height="30" rx="5"/>
+    </g>
+
+    <path d="M184 83v93c0 12-9.8 21.8-21.8 21.8S140.5 188 140.5 176s9.8-21.8 21.8-21.8c4 0 7.7 1.1 10.9 2.9V99l64-14.8v80.8c0 12-9.8 21.8-21.8 21.8s-21.8-9.8-21.8-21.8 9.8-21.8 21.8-21.8c4 0 7.7 1.1 10.9 2.9V105z" fill="url(#noteGrad)"/>
+  </g>
+
+  <g transform="translate(385 108)">
+    <text x="0" y="88" fill="#162447" font-size="92" font-weight="800" letter-spacing="4" font-family="'Noto Sans SC','Microsoft YaHei','PingFang SC',sans-serif">&#20113;&#38899;&#35299;&#26512;</text>
+    <text x="2" y="136" fill="#0f6fff" fill-opacity="0.92" font-size="34" font-weight="700" letter-spacing="3" font-family="Manrope,'Segoe UI',sans-serif">CLOUD MUSIC PARSING</text>
+    <rect x="0" y="166" width="700" height="2.5" rx="1.25" fill="#cfe1ff"/>
+    <text x="2" y="206" fill="#4a5e8d" font-size="27" font-weight="600" letter-spacing="1.2" font-family="'Noto Sans SC','Microsoft YaHei','PingFang SC',sans-serif">&#32858;&#21512;&#35299;&#26512; · &#26080;&#25439;&#38899;&#36136; · &#33258;&#37096;&#32626;&#24179;&#21488;</text>
+  </g>
+</svg>
