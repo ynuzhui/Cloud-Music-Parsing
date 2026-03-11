@@ -1,36 +1,58 @@
-﻿<script setup lang="ts">
+<script setup lang="ts">
 import { reactive, ref } from "vue";
 import { useRouter } from "vue-router";
 import { createDiscreteApi } from "naive-ui";
-import { login } from "@/api/modules/auth";
-import { useAuthStore } from "@/stores/auth";
+import { register } from "@/api/modules/auth";
 
 const router = useRouter();
-const authStore = useAuthStore();
 const { message } = createDiscreteApi(["message"]);
+const englishUsernamePattern = /^[A-Za-z]{4,}$/;
 
 const loading = ref(false);
 const form = reactive({
+  username: "",
   email: "",
   password: "",
-  remember: true
 });
 
-async function onLogin() {
-  if (!form.email || !form.password) {
-    message.warning("请输入邮箱和密码");
+function isValidUsername(raw: string) {
+  const value = raw.trim();
+  if (!value) return false;
+  if (englishUsernamePattern.test(value)) return true;
+  const chars = [...value];
+  return chars.length >= 2 && chars.every((ch) => /^[\u4E00-\u9FFF]$/.test(ch));
+}
+
+function isValidEmail(raw: string) {
+  const value = raw.trim();
+  return value.length > 3 && value.includes("@");
+}
+
+async function onRegister() {
+  const username = form.username.trim();
+  const email = form.email.trim();
+  if (!isValidUsername(username)) {
+    message.warning("用户名需至少4个英文字符，或至少2个中文字符");
     return;
   }
-  if (!form.email.includes("@")) {
+  if (!isValidEmail(email)) {
     message.warning("请输入有效邮箱地址");
     return;
   }
+  if (form.password.length < 8) {
+    message.warning("密码至少 8 位");
+    return;
+  }
+
   loading.value = true;
   try {
-    const result = await login(form);
-    authStore.setSession(result);
-    message.success("登录成功");
-    router.replace(authStore.isAdmin ? "/admin" : "/");
+    await register({
+      username,
+      email,
+      password: form.password,
+    });
+    message.success("注册成功，请登录");
+    router.replace("/login");
   } catch (error) {
     message.error((error as Error).message);
   } finally {
@@ -38,36 +60,39 @@ async function onLogin() {
   }
 }
 
-function goRegister() {
-  router.push("/register");
+function goLogin() {
+  router.push("/login");
 }
 </script>
 
 <template>
-  <main class="page-shell login-shell">
+  <main class="page-shell register-shell">
     <div class="orb orb-a" />
     <div class="orb orb-b" />
 
-    <section class="login-panel glass-card" v-motion-slide-visible-once-bottom>
+    <section class="register-panel glass-card" v-motion-slide-visible-once-bottom>
       <div class="left-banner">
         <p class="badge">MUSIC PARSER</p>
-        <h1>欢迎回来</h1>
-        <p class="desc">登录后进入管理后台，查看统计、管理 Cookie 池和系统配置。</p>
+        <h1>创建新账号</h1>
+        <p class="desc">注册后即可使用系统功能。若注册被禁用，请联系管理员在后台开启。</p>
       </div>
       <div class="right-form">
-        <h2>用户登录</h2>
+        <h2>用户注册</h2>
         <n-form :show-feedback="false" label-placement="top">
+          <n-form-item label="用户名">
+            <n-input v-model:value="form.username" placeholder="至少4个英文字符，或至少2个中文字符" size="large" />
+          </n-form-item>
           <n-form-item label="邮箱">
             <n-input v-model:value="form.email" placeholder="请输入邮箱地址" size="large" />
           </n-form-item>
           <n-form-item label="密码">
-            <n-input v-model:value="form.password" type="password" show-password-on="click" placeholder="请输入密码" size="large" />
+            <n-input v-model:value="form.password" type="password" show-password-on="click" placeholder="请输入密码（至少 8 位）" size="large" />
           </n-form-item>
-          <n-form-item>
-            <n-checkbox v-model:checked="form.remember">7 天内保持登录</n-checkbox>
-          </n-form-item>
-          <n-button type="primary" size="large" block :loading="loading" @click="onLogin">用户登录</n-button>
-          <n-button tertiary size="large" block class="register-link" @click="goRegister">没有账号，去注册</n-button>
+          <div class="action-row">
+            <n-button type="primary" size="large" block :loading="loading" @click="onRegister">立即注册</n-button>
+            <n-button tertiary size="large" block @click="goLogin">已有账号，去登录</n-button>
+          </div>
+          <p class="hint">用户名与密码规则与管理员账号保持一致。</p>
         </n-form>
       </div>
     </section>
@@ -75,14 +100,13 @@ function goRegister() {
 </template>
 
 <style scoped>
-.login-shell {
+.register-shell {
   position: relative;
   display: grid;
   place-items: center;
   overflow: hidden;
 }
 
-/* ── 装饰光球（与安装页统一）── */
 .orb {
   position: absolute;
   border-radius: 999px;
@@ -106,7 +130,7 @@ function goRegister() {
   background: radial-gradient(circle at center, rgba(255, 146, 56, 0.2), transparent 62%);
 }
 
-.login-panel {
+.register-panel {
   width: min(980px, 100%);
   display: grid;
   grid-template-columns: 1.1fr 1fr;
@@ -155,12 +179,19 @@ function goRegister() {
   font-size: 24px;
 }
 
-.register-link {
-  margin-top: 10px;
+.action-row {
+  display: grid;
+  gap: 10px;
+}
+
+.hint {
+  margin: 12px 0 0;
+  font-size: 12px;
+  color: var(--text-2);
 }
 
 @media (max-width: 840px) {
-  .login-panel {
+  .register-panel {
     grid-template-columns: 1fr;
   }
 
@@ -173,5 +204,3 @@ function goRegister() {
   }
 }
 </style>
-
-

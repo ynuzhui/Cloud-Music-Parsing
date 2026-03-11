@@ -5,6 +5,7 @@ import { useSettingsStore } from "@/stores/settings";
 import HomeView from "@/views/HomeView.vue";
 import InstallView from "@/views/InstallView.vue";
 import LoginView from "@/views/LoginView.vue";
+import RegisterView from "@/views/RegisterView.vue";
 import AdminLayout from "@/layouts/AdminLayout.vue";
 import DashboardView from "@/views/admin/DashboardView.vue";
 import CookiesView from "@/views/admin/CookiesView.vue";
@@ -21,6 +22,7 @@ const router = createRouter({
     { path: "/", component: HomeView },
     { path: "/install", component: InstallView, meta: { guest: true } },
     { path: "/login", component: LoginView, meta: { guest: true } },
+    { path: "/register", component: RegisterView, meta: { guest: true } },
     {
       path: "/admin",
       component: AdminLayout,
@@ -53,7 +55,7 @@ router.beforeEach(async (to) => {
     }
   }
 
-  if (to.path === "/login" && authStore.isAuthed) {
+  if ((to.path === "/login" || to.path === "/register") && authStore.isAuthed) {
     return authStore.isAdmin ? "/admin" : "/";
   }
 

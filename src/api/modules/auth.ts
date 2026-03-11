@@ -17,8 +17,22 @@ export type LoginResult = {
   };
 };
 
+export type RegisterPayload = {
+  username: string;
+  email: string;
+  password: string;
+};
+
+export type RegisterResult = {
+  user_id: number;
+};
+
 export function login(payload: LoginPayload) {
   return http.post<never, LoginResult>("/api/auth/login", payload);
+}
+
+export function register(payload: RegisterPayload) {
+  return http.post<never, RegisterResult>("/api/auth/register", payload);
 }
 
 export function getCurrentUser() {
