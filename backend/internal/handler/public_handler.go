@@ -23,5 +23,13 @@ func (h *PublicHandler) Site(c *gin.Context) {
 		util.Err(c, http.StatusInternalServerError, err.Error())
 		return
 	}
-	util.OK(c, settings.Site)
+	util.OK(c, gin.H{
+		"name":                settings.Site.Name,
+		"keywords":            settings.Site.Keywords,
+		"description":         settings.Site.Description,
+		"icp_no":              settings.Site.ICPNo,
+		"police_no":           settings.Site.PoliceNo,
+		"parse_require_login": settings.Feature.ParseRequireLogin,
+		"timezone":            "Asia/Shanghai",
+	})
 }

@@ -53,16 +53,25 @@ func (h *AuthHandler) Login(c *gin.Context) {
 		util.Err(c, http.StatusUnauthorized, "invalid credentials")
 		return
 	}
+	if strings.ToLower(strings.TrimSpace(user.Status)) != "active" {
+		util.Err(c, http.StatusForbidden, "account disabled")
+		return
+	}
 
 	ttl := 24 * time.Hour
 	if req.Remember {
 		ttl = 7 * 24 * time.Hour
 	}
-	token, expiresAt, err := h.jwtMgr.IssueToken(user.ID, user.Username, user.Role, ttl)
+	token, expiresAt, err := h.jwtMgr.IssueToken(user.ID, user.Username, user.Role, user.TokenVersion, ttl)
 	if err != nil {
 		util.Err(c, http.StatusInternalServerError, "failed to issue token")
 		return
 	}
+	now := time.Now()
+	_ = h.db.Model(&model.User{}).Where("id = ?", user.ID).Updates(map[string]any{
+		"last_login_at": &now,
+		"last_login_ip": strings.TrimSpace(c.ClientIP()),
+	}).Error
 
 	util.OK(c, gin.H{
 		"token":      token,
@@ -101,6 +110,12 @@ func (h *AuthHandler) Register(c *gin.Context) {
 		Username: req.Username,
 		Email:    req.Email,
 		Role:     "user",
+		Status:   "active",
+	}
+	var defaultGroup model.UserGroup
+	if err := h.db.Where("is_default = ?", true).Order("id asc").First(&defaultGroup).Error; err == nil {
+		groupID := defaultGroup.ID
+		user.GroupID = &groupID
 	}
 	if err := user.SetPassword(req.Password); err != nil {
 		util.Err(c, http.StatusInternalServerError, "failed to set password")

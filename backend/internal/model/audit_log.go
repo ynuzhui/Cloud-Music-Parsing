@@ -4,6 +4,8 @@ import "time"
 
 type AuditLog struct {
 	ID          uint      `gorm:"primaryKey" json:"id"`
+	UserID      *uint     `gorm:"index" json:"user_id"`
+	Role        string    `gorm:"size:16;index" json:"role"`
 	Path        string    `gorm:"size:255;index;not null" json:"path"`
 	Method      string    `gorm:"size:10;index;not null" json:"method"`
 	IP          string    `gorm:"size:64;index;not null" json:"ip"`

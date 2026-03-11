@@ -23,6 +23,9 @@ type SiteSettings struct {
 type FeatureSettings struct {
 	AllowRegister       bool   `json:"allow_register"`
 	DefaultParseQuality string `json:"default_parse_quality"`
+	ParseRequireLogin   bool   `json:"parse_require_login"`
+	DefaultDailyLimit   int    `json:"default_daily_parse_limit"`
+	DefaultConcurrency  int    `json:"default_concurrency_limit"`
 }
 
 type RedisSettings struct {
@@ -112,6 +115,9 @@ func (s *SettingService) Save(settings SystemSettings) error {
 		{"site_police_no", settings.Site.PoliceNo, false},
 		{"allow_register", strconv.FormatBool(settings.Feature.AllowRegister), false},
 		{"default_parse_quality", normalizeQuality(settings.Feature.DefaultParseQuality, "standard"), false},
+		{"parse_require_login", strconv.FormatBool(settings.Feature.ParseRequireLogin), false},
+		{"default_daily_parse_limit", strconv.Itoa(nonNegative(settings.Feature.DefaultDailyLimit)), false},
+		{"default_concurrency_limit", strconv.Itoa(nonNegative(settings.Feature.DefaultConcurrency)), false},
 		{"redis_enabled", strconv.FormatBool(settings.Redis.Enabled), false},
 		{"redis_host", settings.Redis.Host, false},
 		{"redis_port", strconv.Itoa(settings.Redis.Port), false},
@@ -149,6 +155,9 @@ func (s *SettingService) Load() (SystemSettings, error) {
 		Feature: FeatureSettings{
 			AllowRegister:       false,
 			DefaultParseQuality: "standard",
+			ParseRequireLogin:   true,
+			DefaultDailyLimit:   100,
+			DefaultConcurrency:  2,
 		},
 		Redis: RedisSettings{
 			Enabled: false,
@@ -185,6 +194,9 @@ func (s *SettingService) Load() (SystemSettings, error) {
 		s.mustGetString("default_parse_quality", defaults.Feature.DefaultParseQuality),
 		defaults.Feature.DefaultParseQuality,
 	)
+	settings.Feature.ParseRequireLogin = s.mustGetBool("parse_require_login", defaults.Feature.ParseRequireLogin)
+	settings.Feature.DefaultDailyLimit = s.mustGetInt("default_daily_parse_limit", defaults.Feature.DefaultDailyLimit)
+	settings.Feature.DefaultConcurrency = s.mustGetInt("default_concurrency_limit", defaults.Feature.DefaultConcurrency)
 	settings.Redis.Enabled = s.mustGetBool("redis_enabled", defaults.Redis.Enabled)
 	settings.Redis.Host = s.mustGetString("redis_host", defaults.Redis.Host)
 	settings.Redis.Port = s.mustGetInt("redis_port", defaults.Redis.Port)
@@ -207,6 +219,10 @@ func (s *SettingService) Load() (SystemSettings, error) {
 
 func (s *SettingService) CanRegister() bool {
 	return s.mustGetBool("allow_register", false)
+}
+
+func (s *SettingService) ParseRequireLogin() bool {
+	return s.mustGetBool("parse_require_login", true)
 }
 
 func (s *SettingService) upsert(key string, plainValue string, encrypt bool) error {
@@ -258,4 +274,11 @@ func (s *SettingService) mustGetInt(key string, fallback int) int {
 		return fallback
 	}
 	return n
+}
+
+func nonNegative(v int) int {
+	if v < 0 {
+		return 0
+	}
+	return v
 }

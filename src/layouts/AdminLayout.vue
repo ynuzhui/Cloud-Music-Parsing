@@ -2,7 +2,7 @@
 import { computed, h, onMounted } from "vue";
 import { RouterLink, RouterView, useRoute, useRouter } from "vue-router";
 import { NIcon, type MenuOption, createDiscreteApi } from "naive-ui";
-import { ChartPie, Cookie, Settings, Logout, Music, ExternalLink } from "@vicons/tabler";
+import { ChartPie, Cookie, Settings, Logout, Music, ExternalLink, Users, Shield } from "@vicons/tabler";
 import { useAuthStore } from "@/stores/auth";
 import { useSettingsStore } from "@/stores/settings";
 import { getSettings } from "@/api/modules/admin";
@@ -14,6 +14,7 @@ const settingsStore = useSettingsStore();
 const { message } = createDiscreteApi(["message"]);
 
 const siteName = computed(() => settingsStore.siteName);
+const isSuperAdmin = computed(() => authStore.user?.role === "super_admin");
 
 onMounted(async () => {
   try {
@@ -25,47 +26,64 @@ onMounted(async () => {
   }
 });
 
-const menuOptions: MenuOption[] = [
-  {
-    key: "/admin",
-    label: () => h(RouterLink, { to: "/admin" }, { default: () => "统计总览" }),
-    icon: renderIcon(ChartPie)
-  },
-  {
-    key: "/admin/cookies",
-    label: () => h(RouterLink, { to: "/admin/cookies" }, { default: () => "Cookie 池" }),
-    icon: renderIcon(Cookie)
-  },
-  {
-    key: "/admin/settings",
-    label: "系统设置",
-    icon: renderIcon(Settings),
-    children: [
-      {
-        key: "/admin/settings",
-        label: () => h(RouterLink, { to: "/admin/settings" }, { default: () => "站点配置" }),
-      },
-      {
-        key: "/admin/settings/redis",
-        label: () => h(RouterLink, { to: "/admin/settings/redis" }, { default: () => "Redis 配置" }),
-      },
-      {
-        key: "/admin/settings/smtp",
-        label: () => h(RouterLink, { to: "/admin/settings/smtp" }, { default: () => "SMTP 配置" }),
-      },
-      {
-        key: "/admin/settings/proxy",
-        label: () => h(RouterLink, { to: "/admin/settings/proxy" }, { default: () => "代理配置" }),
-      }
-    ]
+const menuOptions = computed<MenuOption[]>(() => {
+  const options: MenuOption[] = [
+    {
+      key: "/admin",
+      label: () => h(RouterLink, { to: "/admin" }, { default: () => "统计总览" }),
+      icon: renderIcon(ChartPie)
+    },
+    {
+      key: "/admin/users",
+      label: () => h(RouterLink, { to: "/admin/users" }, { default: () => "用户管理" }),
+      icon: renderIcon(Users)
+    },
+    {
+      key: "/admin/cookies",
+      label: () => h(RouterLink, { to: "/admin/cookies" }, { default: () => "Cookie 池" }),
+      icon: renderIcon(Cookie)
+    },
+    {
+      key: "/admin/settings",
+      label: "系统设置",
+      icon: renderIcon(Settings),
+      children: [
+        {
+          key: "/admin/settings",
+          label: () => h(RouterLink, { to: "/admin/settings" }, { default: () => "站点配置" }),
+        },
+        {
+          key: "/admin/settings/redis",
+          label: () => h(RouterLink, { to: "/admin/settings/redis" }, { default: () => "Redis 配置" }),
+        },
+        {
+          key: "/admin/settings/smtp",
+          label: () => h(RouterLink, { to: "/admin/settings/smtp" }, { default: () => "SMTP 配置" }),
+        },
+        {
+          key: "/admin/settings/proxy",
+          label: () => h(RouterLink, { to: "/admin/settings/proxy" }, { default: () => "代理配置" }),
+        }
+      ]
+    }
+  ];
+  if (isSuperAdmin.value) {
+    options.splice(2, 0, {
+      key: "/admin/user-groups",
+      label: () => h(RouterLink, { to: "/admin/user-groups" }, { default: () => "用户组管理" }),
+      icon: renderIcon(Shield)
+    });
   }
-];
+  return options;
+});
 
 const selectedKey = computed(() => {
   const p = route.path;
   if (p === "/admin/settings/redis") return "/admin/settings/redis";
   if (p === "/admin/settings/smtp") return "/admin/settings/smtp";
   if (p === "/admin/settings/proxy") return "/admin/settings/proxy";
+  if (p.startsWith("/admin/user-groups")) return "/admin/user-groups";
+  if (p.startsWith("/admin/users")) return "/admin/users";
   if (p.startsWith("/admin/settings")) return "/admin/settings";
   if (p.startsWith("/admin/cookies")) return "/admin/cookies";
   return "/admin";

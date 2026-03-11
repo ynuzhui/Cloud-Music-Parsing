@@ -11,6 +11,7 @@ type Claims struct {
 	UserID   uint   `json:"uid"`
 	Username string `json:"username"`
 	Role     string `json:"role"`
+	TokenVer int    `json:"tv"`
 	jwt.RegisteredClaims
 }
 
@@ -26,12 +27,13 @@ func NewJWTManager(secret, issuer string) *JWTManager {
 	}
 }
 
-func (j *JWTManager) IssueToken(userID uint, username, role string, ttl time.Duration) (string, time.Time, error) {
+func (j *JWTManager) IssueToken(userID uint, username, role string, tokenVer int, ttl time.Duration) (string, time.Time, error) {
 	expireAt := time.Now().Add(ttl)
 	claims := Claims{
 		UserID:   userID,
 		Username: username,
 		Role:     role,
+		TokenVer: tokenVer,
 		RegisteredClaims: jwt.RegisteredClaims{
 			Issuer:    j.issuer,
 			ExpiresAt: jwt.NewNumericDate(expireAt),

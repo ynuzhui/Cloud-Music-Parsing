@@ -16,22 +16,22 @@ import (
 
 type ParseHandler struct {
 	parseService *service.ParseService
+	quotaService *service.QuotaService
 }
 
-func NewParseHandler(parseService *service.ParseService) *ParseHandler {
-	return &ParseHandler{parseService: parseService}
+func NewParseHandler(parseService *service.ParseService, quotaService *service.QuotaService) *ParseHandler {
+	return &ParseHandler{
+		parseService: parseService,
+		quotaService: quotaService,
+	}
 }
 
 func (h *ParseHandler) ParseNetease(c *gin.Context) {
-	claimsAny, ok := c.Get(middleware.ContextClaimsKey)
-	if !ok {
-		util.Err(c, http.StatusUnauthorized, "missing auth claims")
-		return
-	}
-	claims, ok := claimsAny.(*security.Claims)
-	if !ok {
-		util.Err(c, http.StatusUnauthorized, "invalid auth claims")
-		return
+	userID := uint(0)
+	if claimsAny, ok := c.Get(middleware.ContextClaimsKey); ok {
+		if claims, ok := claimsAny.(*security.Claims); ok {
+			userID = claims.UserID
+		}
 	}
 
 	var req struct {
@@ -48,7 +48,16 @@ func (h *ParseHandler) ParseNetease(c *gin.Context) {
 		return
 	}
 
-	result, err := h.parseService.ParseNetease(c.Request.Context(), claims.UserID, req.URL, req.Quality)
+	if h.quotaService != nil {
+		release, _, err := h.quotaService.AcquireParseQuota(userID, c.ClientIP())
+		if err != nil {
+			util.Err(c, http.StatusTooManyRequests, err.Error())
+			return
+		}
+		defer release()
+	}
+
+	result, err := h.parseService.ParseNetease(c.Request.Context(), userID, c.ClientIP(), req.URL, req.Quality)
 	if err != nil {
 		util.Err(c, http.StatusBadRequest, err.Error())
 		return

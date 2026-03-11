@@ -6,6 +6,8 @@ export type PublicSiteSettings = {
   description: string;
   icp_no: string;
   police_no: string;
+  parse_require_login: boolean;
+  timezone: string;
 };
 
 let siteSettingsCache: PublicSiteSettings | null = null;

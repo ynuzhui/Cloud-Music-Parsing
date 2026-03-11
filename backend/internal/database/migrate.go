@@ -9,6 +9,7 @@ import (
 func AutoMigrate(db *gorm.DB) error {
 	return db.AutoMigrate(
 		&model.User{},
+		&model.UserGroup{},
 		&model.Setting{},
 		&model.Cookie{},
 		&model.ParseRecord{},

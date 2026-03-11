@@ -13,10 +13,14 @@ export type LoginResult = {
     id: number;
     username: string;
     email: string;
-    role: "admin" | "user";
+    role: "super_admin" | "admin" | "user";
   };
 };
 
 export function login(payload: LoginPayload) {
   return http.post<never, LoginResult>("/api/auth/login", payload);
+}
+
+export function getCurrentUser() {
+  return http.get<never, LoginResult["user"]>("/api/auth/me");
 }

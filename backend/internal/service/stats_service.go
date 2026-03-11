@@ -1,9 +1,8 @@
 package service
 
 import (
-	"time"
-
 	"go-music-aggregator/backend/internal/model"
+	"go-music-aggregator/backend/internal/util"
 
 	"gorm.io/gorm"
 )
@@ -41,7 +40,7 @@ func (s *StatsService) Dashboard() (DashboardStats, error) {
 		return out, err
 	}
 
-	from := time.Now().AddDate(0, 0, -6).Format("2006-01-02")
+	from := util.NowBeijing().AddDate(0, 0, -6).Format("2006-01-02")
 	var rows []DayCount
 	if err := s.db.Model(&model.ParseRecord{}).
 		Select("date(created_at) as day, count(*) as count").

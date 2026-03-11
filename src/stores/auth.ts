@@ -12,7 +12,9 @@ export const useAuthStore = defineStore("auth", {
     user: safeParse(localStorage.getItem("mp_user"))
   }),
   getters: {
-    isAuthed: (state) => !!state.token
+    isAuthed: (state) => !!state.token,
+    isAdmin: (state) => state.user?.role === "admin" || state.user?.role === "super_admin",
+    isSuperAdmin: (state) => state.user?.role === "super_admin"
   },
   actions: {
     setSession(payload: LoginResult) {

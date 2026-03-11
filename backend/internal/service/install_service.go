@@ -109,12 +109,23 @@ func (s *InstallService) Complete(req InstallCompleteRequest) (*InstallResult, e
 	admin := model.User{
 		Username: strings.TrimSpace(req.AdminUsername),
 		Email:    strings.TrimSpace(req.AdminEmail),
-		Role:     "admin",
+		Role:     "super_admin",
+		Status:   "active",
 	}
 	if err := admin.SetPassword(req.AdminPassword); err != nil {
 		return nil, err
 	}
 	if err := db.Create(&admin).Error; err != nil {
+		return nil, err
+	}
+	defaultGroup := model.UserGroup{
+		Name:        "default",
+		Description: "Default group",
+		DailyLimit:  100,
+		Concurrency: 2,
+		IsDefault:   true,
+	}
+	if err := db.Create(&defaultGroup).Error; err != nil {
 		return nil, err
 	}
 
@@ -140,6 +151,9 @@ func (s *InstallService) Complete(req InstallCompleteRequest) (*InstallResult, e
 		Feature: FeatureSettings{
 			AllowRegister:       false,
 			DefaultParseQuality: "standard",
+			ParseRequireLogin:   true,
+			DefaultDailyLimit:   100,
+			DefaultConcurrency:  2,
 		},
 		Redis: RedisSettings{
 			Enabled: false,

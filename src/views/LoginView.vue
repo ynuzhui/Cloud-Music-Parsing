@@ -30,7 +30,7 @@ async function onLogin() {
     const result = await login(form);
     authStore.setSession(result);
     message.success("登录成功");
-    router.replace("/admin");
+    router.replace(authStore.isAdmin ? "/admin" : "/");
   } catch (error) {
     message.error((error as Error).message);
   } finally {
@@ -51,18 +51,18 @@ async function onLogin() {
         <p class="desc">登录后进入管理后台，查看统计、管理 Cookie 池和系统配置。</p>
       </div>
       <div class="right-form">
-        <h2>管理员登录</h2>
+        <h2>用户登录</h2>
         <n-form :show-feedback="false" label-placement="top">
           <n-form-item label="邮箱">
             <n-input v-model:value="form.email" placeholder="请输入邮箱地址" size="large" />
           </n-form-item>
           <n-form-item label="密码">
-            <n-input v-model:value="form.password" type="password" show-password-on="click" size="large" />
+            <n-input v-model:value="form.password" type="password" show-password-on="click" placeholder="请输入密码" size="large" />
           </n-form-item>
           <n-form-item>
             <n-checkbox v-model:checked="form.remember">7 天内保持登录</n-checkbox>
           </n-form-item>
-          <n-button type="primary" size="large" block :loading="loading" @click="onLogin">登录后台</n-button>
+          <n-button type="primary" size="large" block :loading="loading" @click="onLogin">用户登录</n-button>
         </n-form>
       </div>
     </section>

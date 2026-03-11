@@ -67,6 +67,9 @@ export type SystemSettings = {
   feature: {
     allow_register: boolean;
     default_parse_quality: "standard" | "exhigh" | "lossless" | "hires" | "jymaster";
+    parse_require_login: boolean;
+    default_daily_parse_limit: number;
+    default_concurrency_limit: number;
   };
   redis: {
     enabled: boolean;
@@ -130,4 +133,112 @@ export function verifyCookie(id: number) {
 
 export function verifyAllCookies() {
   return http.post<never, VerifyAllCookiesResponse>("/api/admin/cookies/verify-all");
+}
+
+export type UserListResult = {
+  items: UserItem[];
+  total: number;
+  page: number;
+  page_size: number;
+};
+
+export type UserItem = {
+  id: number;
+  username: string;
+  email: string;
+  role: "user" | "admin" | "super_admin";
+  status: "active" | "disabled";
+  group_id: number | null;
+  group_name: string;
+  daily_limit: number;
+  concurrency_limit: number;
+  last_login_at: string | null;
+  last_login_ip: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type UserGroupItem = {
+  id: number;
+  name: string;
+  description: string;
+  daily_limit: number;
+  concurrency_limit: number;
+  is_default: boolean;
+  member_count: number;
+  created_at: string;
+  updated_at: string;
+};
+
+export function listUsers(params: { page?: number; page_size?: number; keyword?: string; role?: string; status?: string } = {}) {
+  return http.get<never, UserListResult>("/api/admin/users", { params });
+}
+
+export function createUser(payload: {
+  username: string;
+  email: string;
+  password: string;
+  role?: "user" | "admin" | "super_admin";
+  group_id?: number;
+  daily_limit?: number;
+  concurrency_limit?: number;
+  status?: "active" | "disabled";
+}) {
+  return http.post("/api/admin/users", payload);
+}
+
+export function updateUser(
+  id: number,
+  payload: {
+    username?: string;
+    email?: string;
+    group_id?: number;
+    daily_limit?: number;
+    concurrency_limit?: number;
+  }
+) {
+  return http.patch(`/api/admin/users/${id}`, payload);
+}
+
+export function updateUserStatus(id: number, active: boolean) {
+  return http.patch(`/api/admin/users/${id}/status`, { active });
+}
+
+export function updateUserRole(id: number, role: "user" | "admin" | "super_admin") {
+  return http.patch(`/api/admin/users/${id}/role`, { role });
+}
+
+export function resetUserPassword(id: number, password: string) {
+  return http.post(`/api/admin/users/${id}/reset-password`, { password });
+}
+
+export function listUserGroups() {
+  return http.get<never, UserGroupItem[]>("/api/admin/user-groups");
+}
+
+export function createUserGroup(payload: {
+  name: string;
+  description?: string;
+  daily_limit?: number;
+  concurrency_limit?: number;
+  is_default?: boolean;
+}) {
+  return http.post("/api/admin/user-groups", payload);
+}
+
+export function updateUserGroup(
+  id: number,
+  payload: {
+    name?: string;
+    description?: string;
+    daily_limit?: number;
+    concurrency_limit?: number;
+    is_default?: boolean;
+  }
+) {
+  return http.patch(`/api/admin/user-groups/${id}`, payload);
+}
+
+export function deleteUserGroup(id: number) {
+  return http.delete(`/api/admin/user-groups/${id}`);
 }

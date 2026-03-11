@@ -128,12 +128,12 @@ func (s *ParseService) RefreshCacheBackend(ctx context.Context) error {
 	return nil
 }
 
-func (s *ParseService) ParseNetease(ctx context.Context, userID uint, sourceURL, quality string) (*ParseResult, error) {
+func (s *ParseService) ParseNetease(ctx context.Context, userID uint, requestIP, sourceURL, quality string) (*ParseResult, error) {
 	songID, err := extractSongID(sourceURL)
 	if err != nil {
 		resolvedID, resolveErr := s.resolveSongIDByRedirect(ctx, sourceURL)
 		if resolveErr != nil {
-			_ = s.recordParse(userID, sourceURL, "", quality, false, "failed")
+			_ = s.recordParse(userID, requestIP, sourceURL, "", quality, false, "failed")
 			return nil, fmt.Errorf("%s (redirect resolve failed: %v)", err.Error(), resolveErr)
 		}
 		songID = resolvedID
@@ -165,17 +165,17 @@ func (s *ParseService) ParseNetease(ctx context.Context, userID uint, sourceURL,
 			DiscNumber:  meta.DiscNumber,
 			CoverURL:    meta.CoverURL,
 		}
-		_ = s.recordParse(userID, sourceURL, cached, level, true, "success")
+		_ = s.recordParse(userID, requestIP, sourceURL, cached, level, true, "success")
 		return &result, nil
 	}
 
 	link, err := s.fetchNeteaseLink(ctx, songID, level)
 	if err != nil {
-		_ = s.recordParse(userID, sourceURL, "", level, false, "failed")
+		_ = s.recordParse(userID, requestIP, sourceURL, "", level, false, "failed")
 		return nil, err
 	}
 	_ = s.setCache(ctx, cacheKey, link, cacheTTLParseLink)
-	_ = s.recordParse(userID, sourceURL, link, level, false, "success")
+	_ = s.recordParse(userID, requestIP, sourceURL, link, level, false, "success")
 	return &ParseResult{
 		Provider:    "netease",
 		SongID:      songID,
@@ -878,9 +878,10 @@ func marshalJSONNoEscape(v any) (string, error) {
 	return strings.TrimRight(buf.String(), "\n"), nil
 }
 
-func (s *ParseService) recordParse(userID uint, sourceURL, resultURL, quality string, cacheHit bool, status string) error {
+func (s *ParseService) recordParse(userID uint, requestIP, sourceURL, resultURL, quality string, cacheHit bool, status string) error {
 	row := model.ParseRecord{
 		UserID:    userID,
+		RequestIP: strings.TrimSpace(requestIP),
 		Provider:  "netease",
 		SourceURL: sourceURL,
 		ResultURL: resultURL,

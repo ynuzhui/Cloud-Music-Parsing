@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"go-music-aggregator/backend/internal/model"
+	"go-music-aggregator/backend/internal/security"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
@@ -34,7 +35,19 @@ func AuditLog(db *gorm.DB) gin.HandlerFunc {
 
 		c.Next()
 
+		var userID *uint
+		role := ""
+		if claimsAny, ok := c.Get(ContextClaimsKey); ok {
+			if claims, ok := claimsAny.(*security.Claims); ok {
+				uid := claims.UserID
+				userID = &uid
+				role = strings.TrimSpace(claims.Role)
+			}
+		}
+
 		logRow := model.AuditLog{
+			UserID:      userID,
+			Role:        role,
 			Path:        c.FullPath(),
 			Method:      c.Request.Method,
 			IP:          c.ClientIP(),

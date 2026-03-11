@@ -23,6 +23,9 @@ const siteForm = reactive({
 const featureForm = reactive({
   allow_register: false,
   default_parse_quality: "standard" as "standard" | "exhigh" | "lossless" | "hires" | "jymaster",
+  parse_require_login: true,
+  default_daily_parse_limit: 100,
+  default_concurrency_limit: 2,
 });
 
 const parseQualityOptions = [
@@ -41,6 +44,9 @@ async function loadSettings() {
     Object.assign(siteForm, data.site);
     Object.assign(featureForm, data.feature);
     featureForm.default_parse_quality = data.feature?.default_parse_quality || "standard";
+    featureForm.parse_require_login = data.feature?.parse_require_login ?? true;
+    featureForm.default_daily_parse_limit = Number(data.feature?.default_daily_parse_limit ?? 100);
+    featureForm.default_concurrency_limit = Number(data.feature?.default_concurrency_limit ?? 2);
     settingsStore.syncSiteName(data.site?.name);
     settingsStore.applyDocumentTitle();
   } catch (error) {
@@ -113,6 +119,9 @@ onMounted(loadSettings);
             <n-form-item label="是否允许用户注册">
               <n-switch v-model:value="featureForm.allow_register" />
             </n-form-item>
+            <n-form-item label="是否必须登录后解析">
+              <n-switch v-model:value="featureForm.parse_require_login" />
+            </n-form-item>
             <n-form-item label="默认解析音质">
               <n-select
                 v-model:value="featureForm.default_parse_quality"
@@ -121,6 +130,14 @@ onMounted(loadSettings);
                 size="large"
               />
             </n-form-item>
+            <n-grid :cols="24" :x-gap="14" :y-gap="8">
+              <n-form-item-gi :span="12" label="默认每日解析次数">
+                <n-input-number v-model:value="featureForm.default_daily_parse_limit" :min="0" :precision="0" size="large" style="width: 100%" />
+              </n-form-item-gi>
+              <n-form-item-gi :span="12" label="默认并发上限">
+                <n-input-number v-model:value="featureForm.default_concurrency_limit" :min="0" :precision="0" size="large" style="width: 100%" />
+              </n-form-item-gi>
+            </n-grid>
           </n-form>
         </n-card>
       </n-space>

@@ -12,6 +12,8 @@ import SettingsView from "@/views/admin/SettingsView.vue";
 import RedisSettingsView from "@/views/admin/RedisSettingsView.vue";
 import SmtpSettingsView from "@/views/admin/SmtpSettingsView.vue";
 import ProxySettingsView from "@/views/admin/ProxySettingsView.vue";
+import UsersView from "@/views/admin/UsersView.vue";
+import UserGroupsView from "@/views/admin/UserGroupsView.vue";
 
 const router = createRouter({
   history: createWebHistory(),
@@ -26,6 +28,8 @@ const router = createRouter({
       redirect: "/admin",
       children: [
         { path: "", name: "admin-dashboard", component: DashboardView, meta: { auth: true } },
+        { path: "users", name: "admin-users", component: UsersView, meta: { auth: true } },
+        { path: "user-groups", name: "admin-user-groups", component: UserGroupsView, meta: { auth: true, super: true } },
         { path: "cookies", name: "admin-cookies", component: CookiesView, meta: { auth: true } },
         { path: "settings", name: "admin-settings", component: SettingsView, meta: { auth: true } },
         { path: "settings/redis", name: "admin-settings-redis", component: RedisSettingsView, meta: { auth: true } },
@@ -50,11 +54,17 @@ router.beforeEach(async (to) => {
   }
 
   if (to.path === "/login" && authStore.isAuthed) {
-    return "/admin";
+    return authStore.isAdmin ? "/admin" : "/";
   }
 
   if (to.meta.auth && !authStore.isAuthed) {
     return "/login";
+  }
+  if (to.path.startsWith("/admin") && !authStore.isAdmin) {
+    return "/";
+  }
+  if (to.meta.super && !authStore.isSuperAdmin) {
+    return "/admin";
   }
 
   return true;
