@@ -19,6 +19,11 @@ type UserAdminHandler struct {
 	db *gorm.DB
 }
 
+const (
+	superAdminUserGroupName = "超级管理员组"
+	superAdminUserGroupDesc = "超级管理员用户组"
+)
+
 func NewUserAdminHandler(db *gorm.DB) *UserAdminHandler {
 	return &UserAdminHandler{db: db}
 }
@@ -137,6 +142,14 @@ func (h *UserAdminHandler) CreateUser(c *gin.Context) {
 		util.Err(c, http.StatusBadRequest, err.Error())
 		return
 	}
+	if role == "super_admin" {
+		superGroupID, groupErr := h.ensureSuperAdminGroup()
+		if groupErr != nil {
+			util.Err(c, http.StatusInternalServerError, groupErr.Error())
+			return
+		}
+		groupID = superGroupID
+	}
 
 	user := model.User{
 		Username:     req.Username,
@@ -223,6 +236,14 @@ func (h *UserAdminHandler) UpdateUser(c *gin.Context) {
 	}
 	if req.ConcurrencyLimit != nil {
 		user.Concurrency = maxInt(*req.ConcurrencyLimit, 0)
+	}
+	if user.Role == "super_admin" {
+		superGroupID, groupErr := h.ensureSuperAdminGroup()
+		if groupErr != nil {
+			util.Err(c, http.StatusInternalServerError, groupErr.Error())
+			return
+		}
+		user.GroupID = superGroupID
 	}
 
 	if err := h.db.Save(&user).Error; err != nil {
@@ -410,6 +431,7 @@ func (h *UserAdminHandler) ListUserGroups(c *gin.Context) {
 			"description":       group.Description,
 			"daily_limit":       group.DailyLimit,
 			"concurrency_limit": group.Concurrency,
+			"unlimited_parse":   group.Unlimited,
 			"is_default":        group.IsDefault,
 			"member_count":      countMap[group.ID],
 			"created_at":        group.CreatedAt,
@@ -425,6 +447,7 @@ func (h *UserAdminHandler) CreateUserGroup(c *gin.Context) {
 		Description      string `json:"description"`
 		DailyLimit       int    `json:"daily_limit"`
 		ConcurrencyLimit int    `json:"concurrency_limit"`
+		UnlimitedParse   bool   `json:"unlimited_parse"`
 		IsDefault        bool   `json:"is_default"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -442,6 +465,7 @@ func (h *UserAdminHandler) CreateUserGroup(c *gin.Context) {
 		Description: strings.TrimSpace(req.Description),
 		DailyLimit:  maxInt(req.DailyLimit, 0),
 		Concurrency: maxInt(req.ConcurrencyLimit, 0),
+		Unlimited:   req.UnlimitedParse,
 		IsDefault:   req.IsDefault,
 	}
 	if err := h.db.Transaction(func(tx *gorm.DB) error {
@@ -475,6 +499,7 @@ func (h *UserAdminHandler) UpdateUserGroup(c *gin.Context) {
 		Description      *string `json:"description"`
 		DailyLimit       *int    `json:"daily_limit"`
 		ConcurrencyLimit *int    `json:"concurrency_limit"`
+		UnlimitedParse   *bool   `json:"unlimited_parse"`
 		IsDefault        *bool   `json:"is_default"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -498,6 +523,9 @@ func (h *UserAdminHandler) UpdateUserGroup(c *gin.Context) {
 	}
 	if req.ConcurrencyLimit != nil {
 		group.Concurrency = maxInt(*req.ConcurrencyLimit, 0)
+	}
+	if req.UnlimitedParse != nil {
+		group.Unlimited = *req.UnlimitedParse
 	}
 	if req.IsDefault != nil {
 		group.IsDefault = *req.IsDefault
@@ -554,12 +582,16 @@ func (h *UserAdminHandler) transferSuperAdmin(targetID uint) error {
 		return errors.New("invalid target user")
 	}
 	return h.db.Transaction(func(tx *gorm.DB) error {
+		superGroupID, err := h.ensureSuperAdminGroupWithDB(tx)
+		if err != nil {
+			return err
+		}
 		var target model.User
 		if err := tx.First(&target, targetID).Error; err != nil {
 			return err
 		}
 		var current model.User
-		err := tx.Where("role = ? AND id <> ?", "super_admin", targetID).First(&current).Error
+		err = tx.Where("role = ? AND id <> ?", "super_admin", targetID).First(&current).Error
 		if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
 			return err
 		}
@@ -578,6 +610,7 @@ func (h *UserAdminHandler) transferSuperAdmin(targetID uint) error {
 			Updates(map[string]any{
 				"role":          "super_admin",
 				"status":        "active",
+				"group_id":      superGroupID,
 				"token_version": gorm.Expr("token_version + 1"),
 			}).Error
 	})
@@ -648,6 +681,34 @@ func (h *UserAdminHandler) groupNameMap(users []model.User) map[uint]string {
 		out[group.ID] = group.Name
 	}
 	return out
+}
+
+func (h *UserAdminHandler) ensureSuperAdminGroup() (*uint, error) {
+	return h.ensureSuperAdminGroupWithDB(h.db)
+}
+
+func (h *UserAdminHandler) ensureSuperAdminGroupWithDB(db *gorm.DB) (*uint, error) {
+	var group model.UserGroup
+	if err := db.Where("name = ?", superAdminUserGroupName).Order("id asc").First(&group).Error; err == nil {
+		id := group.ID
+		return &id, nil
+	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, err
+	}
+
+	group = model.UserGroup{
+		Name:        superAdminUserGroupName,
+		Description: superAdminUserGroupDesc,
+		DailyLimit:  0,
+		Concurrency: 0,
+		Unlimited:   true,
+		IsDefault:   false,
+	}
+	if err := db.Create(&group).Error; err != nil {
+		return nil, err
+	}
+	id := group.ID
+	return &id, nil
 }
 
 func getActorClaims(c *gin.Context) (*security.Claims, bool) {

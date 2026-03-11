@@ -30,6 +30,12 @@ func (h *PublicHandler) Site(c *gin.Context) {
 		"icp_no":              settings.Site.ICPNo,
 		"police_no":           settings.Site.PoliceNo,
 		"parse_require_login": settings.Feature.ParseRequireLogin,
-		"timezone":            "Asia/Shanghai",
+		"captcha": gin.H{
+			"enabled":             settings.Captcha.Enabled,
+			"provider":            settings.Captcha.Provider,
+			"geetest_captcha_id":  settings.Captcha.GeetestCaptchaID,
+			"cloudflare_site_key": settings.Captcha.CloudflareSiteKey,
+		},
+		"timezone": "Asia/Shanghai",
 	})
 }

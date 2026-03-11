@@ -1,4 +1,4 @@
-<script setup lang="ts">
+﻿<script setup lang="ts">
 import { computed, h, onMounted, reactive, ref } from "vue";
 import { createDiscreteApi, type DataTableColumns, NButton, NInput, NPopconfirm, NSpace, NSwitch, NTag } from "naive-ui";
 import {
@@ -71,6 +71,103 @@ const groupOptions = computed(() => [
   { label: "不分组", value: 0 },
   ...groups.value.map((g) => ({ label: `${g.name}${g.is_default ? " (默认)" : ""}`, value: g.id })),
 ]);
+
+const limitDraft = reactive({
+  createDaily: "0",
+  createConcurrency: "0",
+  editDaily: "0",
+  editConcurrency: "0",
+  createDailyError: "",
+  createConcurrencyError: "",
+  editDailyError: "",
+  editConcurrencyError: "",
+});
+
+function validateNonNegativeInteger(value: string, label: string): string {
+  const trimmed = value.trim();
+  if (!/^\d+$/.test(trimmed)) {
+    return `请输入${label}（仅数字）`;
+  }
+  return "";
+}
+
+function syncCreateDraftFromForm() {
+  limitDraft.createDaily = String(createForm.daily_limit);
+  limitDraft.createConcurrency = String(createForm.concurrency_limit);
+  limitDraft.createDailyError = "";
+  limitDraft.createConcurrencyError = "";
+}
+
+function syncEditDraftFromForm() {
+  limitDraft.editDaily = String(editForm.daily_limit);
+  limitDraft.editConcurrency = String(editForm.concurrency_limit);
+  limitDraft.editDailyError = "";
+  limitDraft.editConcurrencyError = "";
+}
+
+function onCreateDailyLimitInput(value: string) {
+  limitDraft.createDaily = value;
+  const error = validateNonNegativeInteger(value, "每日次数");
+  limitDraft.createDailyError = error;
+  if (error) return;
+  createForm.daily_limit = Number.parseInt(value.trim(), 10);
+}
+
+function onCreateConcurrencyLimitInput(value: string) {
+  limitDraft.createConcurrency = value;
+  const error = validateNonNegativeInteger(value, "并发上限");
+  limitDraft.createConcurrencyError = error;
+  if (error) return;
+  createForm.concurrency_limit = Number.parseInt(value.trim(), 10);
+}
+
+function onEditDailyLimitInput(value: string) {
+  limitDraft.editDaily = value;
+  const error = validateNonNegativeInteger(value, "每日次数");
+  limitDraft.editDailyError = error;
+  if (error) return;
+  editForm.daily_limit = Number.parseInt(value.trim(), 10);
+}
+
+function onEditConcurrencyLimitInput(value: string) {
+  limitDraft.editConcurrency = value;
+  const error = validateNonNegativeInteger(value, "并发上限");
+  limitDraft.editConcurrencyError = error;
+  if (error) return;
+  editForm.concurrency_limit = Number.parseInt(value.trim(), 10);
+}
+
+function onCreateDailyLimitBlur() {
+  if (limitDraft.createDailyError) {
+    message.warning(limitDraft.createDailyError);
+    return;
+  }
+  limitDraft.createDaily = String(createForm.daily_limit);
+}
+
+function onCreateConcurrencyLimitBlur() {
+  if (limitDraft.createConcurrencyError) {
+    message.warning(limitDraft.createConcurrencyError);
+    return;
+  }
+  limitDraft.createConcurrency = String(createForm.concurrency_limit);
+}
+
+function onEditDailyLimitBlur() {
+  if (limitDraft.editDailyError) {
+    message.warning(limitDraft.editDailyError);
+    return;
+  }
+  limitDraft.editDaily = String(editForm.daily_limit);
+}
+
+function onEditConcurrencyLimitBlur() {
+  if (limitDraft.editConcurrencyError) {
+    message.warning(limitDraft.editConcurrencyError);
+    return;
+  }
+  limitDraft.editConcurrency = String(editForm.concurrency_limit);
+}
 
 function formatTime(raw: string | null): string {
   if (!raw) return "-";
@@ -235,6 +332,11 @@ async function onChangeRole(row: UserItem, role: "user" | "admin" | "super_admin
   }
 }
 
+function openCreate() {
+  syncCreateDraftFromForm();
+  showCreate.value = true;
+}
+
 function openEdit(row: UserItem) {
   editForm.id = row.id;
   editForm.username = row.username;
@@ -242,6 +344,7 @@ function openEdit(row: UserItem) {
   editForm.group_id = row.group_id || 0;
   editForm.daily_limit = row.daily_limit || 0;
   editForm.concurrency_limit = row.concurrency_limit || 0;
+  syncEditDraftFromForm();
   showEdit.value = true;
 }
 
@@ -254,6 +357,10 @@ function openReset(row: UserItem) {
 async function onCreate() {
   if (!createForm.username.trim() || !createForm.email.trim() || createForm.password.length < 8) {
     message.warning("请填写完整信息，密码至少8位");
+    return;
+  }
+  if (limitDraft.createDailyError || limitDraft.createConcurrencyError) {
+    message.warning("请先修正数字输入项");
     return;
   }
   try {
@@ -277,6 +384,7 @@ async function onCreate() {
     createForm.daily_limit = 0;
     createForm.concurrency_limit = 0;
     createForm.active = true;
+    syncCreateDraftFromForm();
     await loadUsers();
   } catch (error) {
     message.error((error as Error).message);
@@ -284,6 +392,10 @@ async function onCreate() {
 }
 
 async function onSaveEdit() {
+  if (limitDraft.editDailyError || limitDraft.editConcurrencyError) {
+    message.warning("请先修正数字输入项");
+    return;
+  }
   try {
     await updateUser(editForm.id, {
       username: editForm.username.trim(),
@@ -320,6 +432,7 @@ function onPageChange(next: number) {
 }
 
 onMounted(async () => {
+  syncCreateDraftFromForm();
   await loadGroups();
   await loadUsers();
 });
@@ -334,7 +447,7 @@ onMounted(async () => {
       </div>
       <n-space>
         <n-button secondary @click="loadUsers">刷新</n-button>
-        <n-button type="primary" @click="showCreate = true">新建用户</n-button>
+        <n-button type="primary" @click="openCreate">新建用户</n-button>
       </n-space>
     </header>
 
@@ -382,10 +495,24 @@ onMounted(async () => {
             <n-select v-model:value="createForm.group_id" :options="groupOptions" />
           </n-form-item-gi>
           <n-form-item-gi :span="6" label="每日次数">
-            <n-input-number v-model:value="createForm.daily_limit" :min="0" :precision="0" style="width: 100%" />
+            <n-input
+              :value="limitDraft.createDaily"
+              inputmode="numeric"
+              placeholder="请输入每日次数"
+              style="width: 100%"
+              @update:value="onCreateDailyLimitInput"
+              @blur="onCreateDailyLimitBlur"
+            />
           </n-form-item-gi>
           <n-form-item-gi :span="6" label="并发上限">
-            <n-input-number v-model:value="createForm.concurrency_limit" :min="0" :precision="0" style="width: 100%" />
+            <n-input
+              :value="limitDraft.createConcurrency"
+              inputmode="numeric"
+              placeholder="请输入并发上限"
+              style="width: 100%"
+              @update:value="onCreateConcurrencyLimitInput"
+              @blur="onCreateConcurrencyLimitBlur"
+            />
           </n-form-item-gi>
           <n-form-item-gi :span="12" label="启用状态">
             <n-switch v-model:value="createForm.active" />
@@ -413,10 +540,24 @@ onMounted(async () => {
             <n-select v-model:value="editForm.group_id" :options="groupOptions" />
           </n-form-item-gi>
           <n-form-item-gi :span="6" label="每日次数">
-            <n-input-number v-model:value="editForm.daily_limit" :min="0" :precision="0" style="width: 100%" />
+            <n-input
+              :value="limitDraft.editDaily"
+              inputmode="numeric"
+              placeholder="请输入每日次数"
+              style="width: 100%"
+              @update:value="onEditDailyLimitInput"
+              @blur="onEditDailyLimitBlur"
+            />
           </n-form-item-gi>
           <n-form-item-gi :span="6" label="并发上限">
-            <n-input-number v-model:value="editForm.concurrency_limit" :min="0" :precision="0" style="width: 100%" />
+            <n-input
+              :value="limitDraft.editConcurrency"
+              inputmode="numeric"
+              placeholder="请输入并发上限"
+              style="width: 100%"
+              @update:value="onEditConcurrencyLimitInput"
+              @blur="onEditConcurrencyLimitBlur"
+            />
           </n-form-item-gi>
         </n-grid>
       </n-form>

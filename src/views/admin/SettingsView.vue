@@ -1,6 +1,7 @@
 ﻿<script setup lang="ts">
-import { onMounted, reactive, ref } from "vue";
+import { computed, onBeforeUnmount, onMounted, reactive, ref } from "vue";
 import { createDiscreteApi } from "naive-ui";
+import { DeviceFloppy } from "@vicons/tabler";
 import { getSettings, saveSettings, type SystemSettings } from "@/api/modules/admin";
 import { clearPublicSiteSettingsCache } from "@/api/modules/site";
 import { useSettingsStore } from "@/stores/settings";
@@ -9,8 +10,10 @@ const { message } = createDiscreteApi(["message"]);
 const settingsStore = useSettingsStore();
 const loading = ref(false);
 const saving = ref(false);
+const initialized = ref(false);
 
 const fullSettings = ref<SystemSettings | null>(null);
+const snapshot = ref("");
 
 const siteForm = reactive({
   name: "",
@@ -28,6 +31,22 @@ const featureForm = reactive({
   default_concurrency_limit: 2,
 });
 
+const numericDraft = reactive({
+  dailyLimit: "100",
+  concurrencyLimit: "2",
+  dailyLimitInvalid: false,
+  concurrencyLimitInvalid: false,
+});
+
+const captchaForm = reactive({
+  enabled: false,
+  provider: "geetest" as "geetest" | "cloudflare",
+  geetest_captcha_id: "",
+  geetest_captcha_key: "",
+  cloudflare_site_key: "",
+  cloudflare_secret_key: "",
+});
+
 const parseQualityOptions = [
   { label: "标准", value: "standard" },
   { label: "极高", value: "exhigh" },
@@ -35,6 +54,68 @@ const parseQualityOptions = [
   { label: "Hi-Res", value: "hires" },
   { label: "超清母带", value: "jymaster" },
 ];
+
+const captchaProviderOptions = [
+  { label: "极验 4.0（推荐）", value: "geetest" },
+  { label: "Cloudflare Turnstile", value: "cloudflare" },
+];
+
+const currentPayload = computed(() => ({
+  site: { ...siteForm },
+  feature: { ...featureForm },
+  captcha: { ...captchaForm },
+}));
+
+const currentSnapshot = computed(() => JSON.stringify(currentPayload.value));
+const hasNumericInputError = computed(() => numericDraft.dailyLimitInvalid || numericDraft.concurrencyLimitInvalid);
+const hasPendingChanges = computed(() => initialized.value && !loading.value && !hasNumericInputError.value && currentSnapshot.value !== snapshot.value);
+
+function isNonNegativeInteger(value: string): boolean {
+  return /^\d+$/.test(value.trim());
+}
+
+function syncNumericDraft() {
+  numericDraft.dailyLimit = String(featureForm.default_daily_parse_limit);
+  numericDraft.concurrencyLimit = String(featureForm.default_concurrency_limit);
+  numericDraft.dailyLimitInvalid = false;
+  numericDraft.concurrencyLimitInvalid = false;
+}
+
+function onDailyLimitInput(value: string) {
+  numericDraft.dailyLimit = value;
+  if (!isNonNegativeInteger(value)) {
+    numericDraft.dailyLimitInvalid = true;
+    return;
+  }
+  numericDraft.dailyLimitInvalid = false;
+  featureForm.default_daily_parse_limit = Number.parseInt(value.trim(), 10);
+}
+
+function onConcurrencyLimitInput(value: string) {
+  numericDraft.concurrencyLimit = value;
+  if (!isNonNegativeInteger(value)) {
+    numericDraft.concurrencyLimitInvalid = true;
+    return;
+  }
+  numericDraft.concurrencyLimitInvalid = false;
+  featureForm.default_concurrency_limit = Number.parseInt(value.trim(), 10);
+}
+
+function onDailyLimitBlur() {
+  if (numericDraft.dailyLimitInvalid) {
+    message.warning("默认每日解析次数仅支持非负整数");
+    return;
+  }
+  numericDraft.dailyLimit = String(featureForm.default_daily_parse_limit);
+}
+
+function onConcurrencyLimitBlur() {
+  if (numericDraft.concurrencyLimitInvalid) {
+    message.warning("默认并发上限仅支持非负整数");
+    return;
+  }
+  numericDraft.concurrencyLimit = String(featureForm.default_concurrency_limit);
+}
 
 async function loadSettings() {
   loading.value = true;
@@ -47,8 +128,20 @@ async function loadSettings() {
     featureForm.parse_require_login = data.feature?.parse_require_login ?? true;
     featureForm.default_daily_parse_limit = Number(data.feature?.default_daily_parse_limit ?? 100);
     featureForm.default_concurrency_limit = Number(data.feature?.default_concurrency_limit ?? 2);
+    Object.assign(captchaForm, {
+      enabled: data.captcha?.enabled ?? false,
+      provider: data.captcha?.provider ?? "geetest",
+      geetest_captcha_id: data.captcha?.geetest_captcha_id ?? "",
+      geetest_captcha_key: data.captcha?.geetest_captcha_key ?? "",
+      cloudflare_site_key: data.captcha?.cloudflare_site_key ?? "",
+      cloudflare_secret_key: data.captcha?.cloudflare_secret_key ?? "",
+    });
+    syncNumericDraft();
     settingsStore.syncSiteName(data.site?.name);
     settingsStore.applyDocumentTitle();
+
+    snapshot.value = currentSnapshot.value;
+    initialized.value = true;
   } catch (error) {
     message.error((error as Error).message);
   } finally {
@@ -58,11 +151,18 @@ async function loadSettings() {
 
 async function onSave() {
   if (!fullSettings.value) return;
+  if (hasNumericInputError.value) {
+    message.warning("请先修正数字输入项后再保存");
+    return;
+  }
   saving.value = true;
   try {
-    fullSettings.value.site = { ...siteForm };
-    fullSettings.value.feature = { ...featureForm };
+    fullSettings.value.site = { ...currentPayload.value.site };
+    fullSettings.value.feature = { ...currentPayload.value.feature };
+    fullSettings.value.captcha = { ...currentPayload.value.captcha };
     await saveSettings(fullSettings.value);
+    syncNumericDraft();
+    snapshot.value = currentSnapshot.value;
     clearPublicSiteSettingsCache();
     settingsStore.setSiteName(siteForm.name);
     settingsStore.applyDocumentTitle();
@@ -74,24 +174,37 @@ async function onSave() {
   }
 }
 
-onMounted(loadSettings);
+function onKeydown(event: KeyboardEvent) {
+  const key = (event.key || "").toLowerCase();
+  if ((event.ctrlKey || event.metaKey) && key === "s") {
+    event.preventDefault();
+    if (hasPendingChanges.value && !saving.value) {
+      void onSave();
+    }
+  }
+}
+
+onMounted(() => {
+  void loadSettings();
+  window.addEventListener("keydown", onKeydown);
+});
+
+onBeforeUnmount(() => {
+  window.removeEventListener("keydown", onKeydown);
+});
 </script>
 
 <template>
-  <section>
+  <section class="settings-page">
     <header class="title-row">
       <div>
         <h2 class="section-title">站点配置</h2>
         <p class="section-subtitle">基本站点信息与功能设置。</p>
       </div>
-      <n-space>
-        <n-button secondary :loading="loading" @click="loadSettings">重新加载</n-button>
-        <n-button type="primary" :loading="saving" @click="onSave">保存设置</n-button>
-      </n-space>
     </header>
 
     <n-spin :show="loading">
-      <n-space vertical :size="16">
+      <n-space vertical :size="16" class="settings-stack" :class="{ 'settings-stack--dock': hasPendingChanges }">
         <n-card title="站点信息" class="setting-card">
           <n-form label-placement="top" :show-feedback="false">
             <n-grid :cols="24" :x-gap="14" :y-gap="8">
@@ -132,25 +245,94 @@ onMounted(loadSettings);
             </n-form-item>
             <n-grid :cols="24" :x-gap="14" :y-gap="8">
               <n-form-item-gi :span="12" label="默认每日解析次数">
-                <n-input-number v-model:value="featureForm.default_daily_parse_limit" :min="0" :precision="0" size="large" style="width: 100%" />
+                <n-input
+                  :value="numericDraft.dailyLimit"
+                  inputmode="numeric"
+                  placeholder="请输入非负整数"
+                  size="large"
+                  style="width: 100%"
+                  @update:value="onDailyLimitInput"
+                  @blur="onDailyLimitBlur"
+                />
               </n-form-item-gi>
               <n-form-item-gi :span="12" label="默认并发上限">
-                <n-input-number v-model:value="featureForm.default_concurrency_limit" :min="0" :precision="0" size="large" style="width: 100%" />
+                <n-input
+                  :value="numericDraft.concurrencyLimit"
+                  inputmode="numeric"
+                  placeholder="请输入非负整数"
+                  size="large"
+                  style="width: 100%"
+                  @update:value="onConcurrencyLimitInput"
+                  @blur="onConcurrencyLimitBlur"
+                />
               </n-form-item-gi>
             </n-grid>
           </n-form>
         </n-card>
+
+        <n-card title="验证码设置" class="setting-card">
+          <n-form label-placement="top" :show-feedback="false">
+            <n-form-item label="启用验证码">
+              <n-switch v-model:value="captchaForm.enabled" />
+            </n-form-item>
+            <n-grid :cols="24" :x-gap="14" :y-gap="8">
+              <n-form-item-gi :span="24" label="验证码提供方">
+                <n-select
+                  v-model:value="captchaForm.provider"
+                  :options="captchaProviderOptions"
+                  placeholder="请选择验证码提供方"
+                  size="large"
+                />
+              </n-form-item-gi>
+            </n-grid>
+
+            <template v-if="captchaForm.provider === 'geetest'">
+              <n-grid :cols="24" :x-gap="14" :y-gap="8">
+                <n-form-item-gi :span="12" label="极验 Captcha ID">
+                  <n-input v-model:value="captchaForm.geetest_captcha_id" placeholder="请输入极验验证码 ID" size="large" />
+                </n-form-item-gi>
+                <n-form-item-gi :span="12" label="极验 Private Key">
+                  <n-input v-model:value="captchaForm.geetest_captcha_key" placeholder="请输入极验私钥" size="large" type="password" show-password-on="click" />
+                </n-form-item-gi>
+              </n-grid>
+            </template>
+
+            <template v-else>
+              <n-grid :cols="24" :x-gap="14" :y-gap="8">
+                <n-form-item-gi :span="12" label="Cloudflare Site Key">
+                  <n-input v-model:value="captchaForm.cloudflare_site_key" placeholder="请输入 Cloudflare 站点密钥" size="large" />
+                </n-form-item-gi>
+                <n-form-item-gi :span="12" label="Cloudflare Secret Key">
+                  <n-input v-model:value="captchaForm.cloudflare_secret_key" placeholder="请输入 Cloudflare 私密密钥" size="large" type="password" show-password-on="click" />
+                </n-form-item-gi>
+              </n-grid>
+            </template>
+          </n-form>
+        </n-card>
       </n-space>
     </n-spin>
+
+    <transition name="save-dock">
+      <div v-if="hasPendingChanges" class="save-dock">
+        <span class="save-dock-label">有未保存的更改</span>
+        <n-button type="primary" :loading="saving" @click="onSave">
+          <template #icon>
+            <n-icon><DeviceFloppy /></n-icon>
+          </template>
+          保存设置
+        </n-button>
+        <span class="save-dock-shortcut">Ctrl + S</span>
+      </div>
+    </transition>
   </section>
 </template>
 
 <style scoped>
 .title-row {
   display: flex;
-  justify-content: space-between;
+  justify-content: flex-start;
   gap: 14px;
-  align-items: center;
+  align-items: flex-start;
   margin-bottom: 14px;
 }
 
@@ -160,12 +342,102 @@ onMounted(loadSettings);
   border: 1px solid rgba(20, 41, 78, 0.08);
 }
 
+.settings-stack {
+  transition: padding-bottom 0.22s ease;
+}
+
+.settings-stack--dock {
+  padding-bottom: 30px;
+}
+
+.save-dock {
+  position: fixed;
+  right: 20px;
+  bottom: 16px;
+  z-index: 1200;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-radius: 26px;
+  background: rgba(250, 252, 255, 0.96);
+  border: 1px solid rgba(20, 41, 78, 0.1);
+  box-shadow: 0 10px 22px rgba(20, 41, 78, 0.09);
+  backdrop-filter: blur(8px);
+}
+
+.save-dock-label {
+  color: var(--text-1);
+  font-weight: 700;
+  font-size: 13px;
+}
+
+.save-dock :deep(.n-button) {
+  height: 36px;
+  padding: 0 16px;
+  border-radius: 12px;
+  font-weight: 700;
+}
+
+.save-dock-shortcut {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 70px;
+  height: 32px;
+  padding: 0 8px;
+  border-radius: 10px;
+  background: rgba(18, 43, 89, 0.06);
+  border: 1px solid rgba(18, 43, 89, 0.12);
+  color: var(--text-2);
+  font-size: 12px;
+  letter-spacing: 0.03em;
+}
+
+.save-dock-enter-active,
+.save-dock-leave-active {
+  transition: all 0.22s ease;
+}
+
+.save-dock-enter-from,
+.save-dock-leave-to {
+  opacity: 0;
+  transform: translateY(16px);
+}
+
 @media (max-width: 760px) {
   .title-row {
     flex-direction: column;
     align-items: flex-start;
   }
+
+  .save-dock {
+    right: 10px;
+    left: 10px;
+    bottom: 10px;
+    gap: 5px;
+    padding: 7px 8px;
+  }
+
+  .save-dock-label {
+    font-size: 11px;
+  }
+
+  .save-dock :deep(.n-button) {
+    height: 32px;
+    padding: 0 12px;
+    border-radius: 10px;
+  }
+
+  .save-dock-shortcut {
+    min-width: 58px;
+    height: 28px;
+    border-radius: 9px;
+    font-size: 10px;
+  }
+
+  .settings-stack--dock {
+    padding-bottom: 44px;
+  }
 }
 </style>
-
-

@@ -33,6 +33,10 @@ const (
 	defaultEnvPathAlt      = "./data/.env"
 	defaultBackendHTTPPort = "8098"
 	backendHTTPPortEnvKey  = "APP_PORT"
+	defaultUserGroupName   = "默认组"
+	defaultUserGroupDesc   = "默认用户组"
+	superUserGroupName     = "超级管理员组"
+	superUserGroupDesc     = "超级管理员用户组"
 )
 
 func main() {
@@ -220,6 +224,9 @@ func mountInstalledRoutes(router *gin.Engine, cfg config.Config, limiter *middle
 	if err := ensureSingleSuperAdmin(db); err != nil {
 		return err
 	}
+	if err := ensureBuiltinUserGroups(db); err != nil {
+		return err
+	}
 
 	box, err := security.NewSecretBox(cfg.MasterKey)
 	if err != nil {
@@ -230,13 +237,14 @@ func mountInstalledRoutes(router *gin.Engine, cfg config.Config, limiter *middle
 	parseSvc := service.NewParseService(db, settingSvc, box)
 	statsSvc := service.NewStatsService(db)
 	quotaSvc := service.NewQuotaService(db, settingSvc)
+	captchaSvc := service.NewCaptchaService(settingSvc)
 	_ = parseSvc.RefreshCacheBackend(context.Background())
 	publicHandler := handler.NewPublicHandler(settingSvc)
 
 	router.Use(middleware.AuditLog(db))
 	router.GET("/api/site", middleware.RequireInstalled(state), publicHandler.Site)
 
-	authHandler := handler.NewAuthHandler(db, jwtMgr, settingSvc)
+	authHandler := handler.NewAuthHandler(db, jwtMgr, settingSvc, captchaSvc)
 	parseHandler := handler.NewParseHandler(parseSvc, quotaSvc)
 	adminHandler := handler.NewAdminHandler(db, box, settingSvc, statsSvc, parseSvc)
 	userAdminHandler := handler.NewUserAdminHandler(db)
@@ -443,4 +451,99 @@ func ensureSingleSuperAdmin(db *gorm.DB) error {
 			"role":          "admin",
 			"token_version": gorm.Expr("token_version + 1"),
 		}).Error
+}
+
+func ensureBuiltinUserGroups(db *gorm.DB) error {
+	return db.Transaction(func(tx *gorm.DB) error {
+		var defaultGroup model.UserGroup
+		defaultErr := tx.Where("is_default = ?", true).Order("id asc").First(&defaultGroup).Error
+		switch {
+		case defaultErr == nil:
+			updates := map[string]any{}
+			if strings.TrimSpace(defaultGroup.Name) == "default" || strings.TrimSpace(defaultGroup.Name) == "" {
+				var conflictCount int64
+				if err := tx.Model(&model.UserGroup{}).Where("name = ? AND id <> ?", defaultUserGroupName, defaultGroup.ID).Count(&conflictCount).Error; err != nil {
+					return err
+				}
+				if conflictCount == 0 {
+					updates["name"] = defaultUserGroupName
+				}
+			}
+			if strings.TrimSpace(defaultGroup.Description) == "Default group" || strings.TrimSpace(defaultGroup.Description) == "" {
+				updates["description"] = defaultUserGroupDesc
+			}
+			if len(updates) > 0 {
+				if err := tx.Model(&model.UserGroup{}).Where("id = ?", defaultGroup.ID).Updates(updates).Error; err != nil {
+					return err
+				}
+			}
+		case errors.Is(defaultErr, gorm.ErrRecordNotFound):
+			nameErr := tx.Where("name = ?", defaultUserGroupName).Order("id asc").First(&defaultGroup).Error
+			switch {
+			case nameErr == nil:
+				if err := tx.Model(&model.UserGroup{}).Where("id = ?", defaultGroup.ID).Updates(map[string]any{
+					"is_default":  true,
+					"description": defaultUserGroupDesc,
+					"unlimited":   false,
+					"daily_limit": defaultGroup.DailyLimit,
+					"concurrency": defaultGroup.Concurrency,
+				}).Error; err != nil {
+					return err
+				}
+				if err := tx.Model(&model.UserGroup{}).Where("id <> ? AND is_default = ?", defaultGroup.ID, true).Update("is_default", false).Error; err != nil {
+					return err
+				}
+			case errors.Is(nameErr, gorm.ErrRecordNotFound):
+				defaultGroup = model.UserGroup{
+					Name:        defaultUserGroupName,
+					Description: defaultUserGroupDesc,
+					DailyLimit:  100,
+					Concurrency: 2,
+					Unlimited:   false,
+					IsDefault:   true,
+				}
+				if err := tx.Create(&defaultGroup).Error; err != nil {
+					return err
+				}
+			default:
+				return nameErr
+			}
+		default:
+			return defaultErr
+		}
+
+		var superGroup model.UserGroup
+		superErr := tx.Where("name = ?", superUserGroupName).Order("id asc").First(&superGroup).Error
+		switch {
+		case superErr == nil:
+		case errors.Is(superErr, gorm.ErrRecordNotFound):
+			superGroup = model.UserGroup{
+				Name:        superUserGroupName,
+				Description: superUserGroupDesc,
+				DailyLimit:  0,
+				Concurrency: 0,
+				Unlimited:   true,
+				IsDefault:   false,
+			}
+			if err := tx.Create(&superGroup).Error; err != nil {
+				return err
+			}
+		default:
+			return superErr
+		}
+
+		var superAdmin model.User
+		if err := tx.Where("role = ?", "super_admin").Order("id asc").First(&superAdmin).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return nil
+			}
+			return err
+		}
+		if superAdmin.GroupID == nil || *superAdmin.GroupID != superGroup.ID {
+			if err := tx.Model(&model.User{}).Where("id = ?", superAdmin.ID).Update("group_id", superGroup.ID).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 }

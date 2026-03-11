@@ -1,7 +1,7 @@
 ﻿<script setup lang="ts">
 import { computed, h, onMounted } from "vue";
 import { RouterLink, RouterView, useRoute, useRouter } from "vue-router";
-import { NIcon, type MenuOption, createDiscreteApi } from "naive-ui";
+import { NIcon, type GlobalThemeOverrides, type MenuOption, createDiscreteApi } from "naive-ui";
 import { ChartPie, Cookie, Settings, Logout, Music, ExternalLink, Users, Shield } from "@vicons/tabler";
 import { useAuthStore } from "@/stores/auth";
 import { useSettingsStore } from "@/stores/settings";
@@ -15,6 +15,18 @@ const { message } = createDiscreteApi(["message"]);
 
 const siteName = computed(() => settingsStore.siteName);
 const isSuperAdmin = computed(() => authStore.user?.role === "super_admin");
+const adminThemeOverrides: GlobalThemeOverrides = {
+  common: {
+    primaryColor: "#0f6fff",
+    primaryColorHover: "#2b80ff",
+    primaryColorPressed: "#0d4ed8",
+    primaryColorSuppl: "#0f6fff",
+    infoColor: "#0f6fff",
+    infoColorHover: "#2b80ff",
+    infoColorPressed: "#0d4ed8",
+    infoColorSuppl: "#0f6fff",
+  },
+};
 
 onMounted(async () => {
   try {
@@ -101,63 +113,65 @@ function logout() {
 </script>
 
 <template>
-  <main class="admin-shell">
-    <n-layout has-sider class="admin-layout">
-      <n-layout-sider
-        bordered
-        collapse-mode="width"
-        :collapsed-width="72"
-        :width="228"
-        :native-scrollbar="false"
-        content-class="sider-scroll-content"
-        :content-style="{ height: '100%' }"
-        class="admin-sider"
-      >
-        <div class="sider-inner">
-          <div class="brand-box">
-            <n-icon size="24"><Music /></n-icon>
-            <span>{{ siteName }}</span>
-          </div>
-          <div class="menu-wrap">
-            <n-menu :value="selectedKey" :options="menuOptions" :default-expand-all="true" />
-          </div>
+  <n-config-provider :theme-overrides="adminThemeOverrides">
+    <main class="admin-shell">
+      <n-layout has-sider class="admin-layout">
+        <n-layout-sider
+          bordered
+          collapse-mode="width"
+          :collapsed-width="72"
+          :width="228"
+          :native-scrollbar="false"
+          content-class="sider-scroll-content"
+          :content-style="{ height: '100%' }"
+          class="admin-sider"
+        >
+          <div class="sider-inner">
+            <div class="brand-box">
+              <n-icon size="24"><Music /></n-icon>
+              <span>{{ siteName }}</span>
+            </div>
+            <div class="menu-wrap">
+              <n-menu :value="selectedKey" :options="menuOptions" :default-expand-all="true" />
+            </div>
 
-          <div class="sider-bottom">
-            <n-button quaternary block class="sider-btn" tag="a" href="/" target="_blank">
-              <template #icon>
-                <n-icon><ExternalLink /></n-icon>
-              </template>
-              访问前台
-            </n-button>
-            <n-button quaternary block type="error" class="sider-btn" @click="logout">
-              <template #icon>
-                <n-icon><Logout /></n-icon>
-              </template>
-              退出登录
-            </n-button>
+            <div class="sider-bottom">
+              <n-button quaternary block class="sider-btn" tag="a" href="/" target="_blank">
+                <template #icon>
+                  <n-icon><ExternalLink /></n-icon>
+                </template>
+                访问前台
+              </n-button>
+              <n-button quaternary block type="error" class="sider-btn" @click="logout">
+                <template #icon>
+                  <n-icon><Logout /></n-icon>
+                </template>
+                退出登录
+              </n-button>
+            </div>
           </div>
-        </div>
-      </n-layout-sider>
+        </n-layout-sider>
 
-      <n-layout>
-        <n-layout-header bordered class="admin-header">
-          <div class="header-title">{{ siteName }}</div>
-          <div class="user-info">
-            <strong>{{ authStore.user?.username || "Admin" }}</strong>
-            <span>{{ authStore.user?.email }}</span>
-          </div>
-        </n-layout-header>
+        <n-layout>
+          <n-layout-header bordered class="admin-header">
+            <div class="header-title">{{ siteName }}</div>
+            <div class="user-info">
+              <strong>{{ authStore.user?.username || "Admin" }}</strong>
+              <span>{{ authStore.user?.email }}</span>
+            </div>
+          </n-layout-header>
 
-        <n-layout-content class="admin-content">
-          <router-view v-slot="{ Component }">
-            <transition name="fade-slide" mode="out-in">
-              <component :is="Component" />
-            </transition>
-          </router-view>
-        </n-layout-content>
+          <n-layout-content class="admin-content">
+            <router-view v-slot="{ Component }">
+              <transition name="fade-slide" mode="out-in">
+                <component :is="Component" />
+              </transition>
+            </router-view>
+          </n-layout-content>
+        </n-layout>
       </n-layout>
-    </n-layout>
-  </main>
+    </main>
+  </n-config-provider>
 </template>
 
 <style scoped>

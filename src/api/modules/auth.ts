@@ -4,6 +4,16 @@ export type LoginPayload = {
   email: string;
   password: string;
   remember: boolean;
+  captcha?: CaptchaPayload;
+};
+
+export type CaptchaPayload = {
+  provider: "geetest" | "cloudflare";
+  geetest_lot_number?: string;
+  geetest_captcha_output?: string;
+  geetest_pass_token?: string;
+  geetest_gen_time?: string;
+  cloudflare_token?: string;
 };
 
 export type LoginResult = {
@@ -21,6 +31,7 @@ export type RegisterPayload = {
   username: string;
   email: string;
   password: string;
+  captcha?: CaptchaPayload;
 };
 
 export type RegisterResult = {

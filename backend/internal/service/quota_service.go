@@ -171,7 +171,13 @@ func (s *QuotaService) resolveEffectiveLimit(userID uint) (*effectiveLimit, erro
 	}
 	if user.GroupID != nil {
 		var group model.UserGroup
-		if err := s.db.Select("id", "daily_limit", "concurrency").First(&group, *user.GroupID).Error; err == nil {
+		if err := s.db.Select("id", "daily_limit", "concurrency", "unlimited").First(&group, *user.GroupID).Error; err == nil {
+			if group.Unlimited {
+				return &effectiveLimit{
+					DailyLimit:       0,
+					ConcurrencyLimit: 0,
+				}, nil
+			}
 			if group.DailyLimit > 0 {
 				limit.DailyLimit = group.DailyLimit
 			}

@@ -71,6 +71,14 @@ export type SystemSettings = {
     default_daily_parse_limit: number;
     default_concurrency_limit: number;
   };
+  captcha: {
+    enabled: boolean;
+    provider: "geetest" | "cloudflare";
+    geetest_captcha_id: string;
+    geetest_captcha_key: string;
+    cloudflare_site_key: string;
+    cloudflare_secret_key: string;
+  };
   redis: {
     enabled: boolean;
     host: string;
@@ -164,6 +172,7 @@ export type UserGroupItem = {
   description: string;
   daily_limit: number;
   concurrency_limit: number;
+  unlimited_parse: boolean;
   is_default: boolean;
   member_count: number;
   created_at: string;
@@ -221,6 +230,7 @@ export function createUserGroup(payload: {
   description?: string;
   daily_limit?: number;
   concurrency_limit?: number;
+  unlimited_parse?: boolean;
   is_default?: boolean;
 }) {
   return http.post("/api/admin/user-groups", payload);
@@ -233,6 +243,7 @@ export function updateUserGroup(
     description?: string;
     daily_limit?: number;
     concurrency_limit?: number;
+    unlimited_parse?: boolean;
     is_default?: boolean;
   }
 ) {

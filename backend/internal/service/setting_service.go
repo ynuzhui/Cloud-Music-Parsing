@@ -28,6 +28,15 @@ type FeatureSettings struct {
 	DefaultConcurrency  int    `json:"default_concurrency_limit"`
 }
 
+type CaptchaSettings struct {
+	Enabled             bool   `json:"enabled"`
+	Provider            string `json:"provider"`
+	GeetestCaptchaID    string `json:"geetest_captcha_id"`
+	GeetestCaptchaKey   string `json:"geetest_captcha_key"`
+	CloudflareSiteKey   string `json:"cloudflare_site_key"`
+	CloudflareSecretKey string `json:"cloudflare_secret_key"`
+}
+
 type RedisSettings struct {
 	Enabled bool   `json:"enabled"`
 	Host    string `json:"host"`
@@ -88,6 +97,7 @@ type SMTPSettings struct {
 type SystemSettings struct {
 	Site    SiteSettings    `json:"site"`
 	Feature FeatureSettings `json:"feature"`
+	Captcha CaptchaSettings `json:"captcha"`
 	Redis   RedisSettings   `json:"redis"`
 	Proxy   ProxySettings   `json:"proxy"`
 	SMTP    SMTPSettings    `json:"smtp"`
@@ -103,6 +113,14 @@ func NewSettingService(db *gorm.DB, box *security.SecretBox) *SettingService {
 }
 
 func (s *SettingService) Save(settings SystemSettings) error {
+	settings.Captcha = normalizeCaptchaSettings(settings.Captcha)
+	if err := validateCaptchaSettings(settings.Captcha); err != nil {
+		return err
+	}
+	if err := s.db.Where("key IN ?", []string{"captcha_login_enabled", "captcha_register_enabled"}).Delete(&model.Setting{}).Error; err != nil {
+		return err
+	}
+
 	ops := []struct {
 		Key       string
 		Value     string
@@ -118,6 +136,12 @@ func (s *SettingService) Save(settings SystemSettings) error {
 		{"parse_require_login", strconv.FormatBool(settings.Feature.ParseRequireLogin), false},
 		{"default_daily_parse_limit", strconv.Itoa(nonNegative(settings.Feature.DefaultDailyLimit)), false},
 		{"default_concurrency_limit", strconv.Itoa(nonNegative(settings.Feature.DefaultConcurrency)), false},
+		{"captcha_enabled", strconv.FormatBool(settings.Captcha.Enabled), false},
+		{"captcha_provider", settings.Captcha.Provider, false},
+		{"captcha_geetest_captcha_id", settings.Captcha.GeetestCaptchaID, false},
+		{"captcha_geetest_captcha_key", settings.Captcha.GeetestCaptchaKey, true},
+		{"captcha_cloudflare_site_key", settings.Captcha.CloudflareSiteKey, false},
+		{"captcha_cloudflare_secret_key", settings.Captcha.CloudflareSecretKey, true},
 		{"redis_enabled", strconv.FormatBool(settings.Redis.Enabled), false},
 		{"redis_host", settings.Redis.Host, false},
 		{"redis_port", strconv.Itoa(settings.Redis.Port), false},
@@ -159,6 +183,14 @@ func (s *SettingService) Load() (SystemSettings, error) {
 			DefaultDailyLimit:   100,
 			DefaultConcurrency:  2,
 		},
+		Captcha: CaptchaSettings{
+			Enabled:             false,
+			Provider:            "geetest",
+			GeetestCaptchaID:    "",
+			GeetestCaptchaKey:   "",
+			CloudflareSiteKey:   "",
+			CloudflareSecretKey: "",
+		},
 		Redis: RedisSettings{
 			Enabled: false,
 			Host:    "127.0.0.1",
@@ -197,6 +229,13 @@ func (s *SettingService) Load() (SystemSettings, error) {
 	settings.Feature.ParseRequireLogin = s.mustGetBool("parse_require_login", defaults.Feature.ParseRequireLogin)
 	settings.Feature.DefaultDailyLimit = s.mustGetInt("default_daily_parse_limit", defaults.Feature.DefaultDailyLimit)
 	settings.Feature.DefaultConcurrency = s.mustGetInt("default_concurrency_limit", defaults.Feature.DefaultConcurrency)
+	settings.Captcha.Enabled = s.mustGetBool("captcha_enabled", defaults.Captcha.Enabled)
+	settings.Captcha.Provider = normalizeCaptchaProvider(s.mustGetString("captcha_provider", defaults.Captcha.Provider))
+	settings.Captcha.GeetestCaptchaID = s.mustGetString("captcha_geetest_captcha_id", defaults.Captcha.GeetestCaptchaID)
+	settings.Captcha.GeetestCaptchaKey = s.mustGetString("captcha_geetest_captcha_key", defaults.Captcha.GeetestCaptchaKey)
+	settings.Captcha.CloudflareSiteKey = s.mustGetString("captcha_cloudflare_site_key", defaults.Captcha.CloudflareSiteKey)
+	settings.Captcha.CloudflareSecretKey = s.mustGetString("captcha_cloudflare_secret_key", defaults.Captcha.CloudflareSecretKey)
+	settings.Captcha = normalizeCaptchaSettings(settings.Captcha)
 	settings.Redis.Enabled = s.mustGetBool("redis_enabled", defaults.Redis.Enabled)
 	settings.Redis.Host = s.mustGetString("redis_host", defaults.Redis.Host)
 	settings.Redis.Port = s.mustGetInt("redis_port", defaults.Redis.Port)
@@ -248,7 +287,8 @@ func (s *SettingService) upsert(key string, plainValue string, encrypt bool) err
 
 func (s *SettingService) mustGetString(key, fallback string) string {
 	var row model.Setting
-	if err := s.db.Where("key = ?", key).First(&row).Error; err != nil {
+	tx := s.db.Where("key = ?", key).Limit(1).Find(&row)
+	if tx.Error != nil || tx.RowsAffected == 0 {
 		return fallback
 	}
 	value := row.Value
@@ -281,4 +321,42 @@ func nonNegative(v int) int {
 		return 0
 	}
 	return v
+}
+
+func normalizeCaptchaSettings(raw CaptchaSettings) CaptchaSettings {
+	cfg := raw
+	cfg.Provider = normalizeCaptchaProvider(cfg.Provider)
+	cfg.GeetestCaptchaID = strings.TrimSpace(cfg.GeetestCaptchaID)
+	cfg.GeetestCaptchaKey = strings.TrimSpace(cfg.GeetestCaptchaKey)
+	cfg.CloudflareSiteKey = strings.TrimSpace(cfg.CloudflareSiteKey)
+	cfg.CloudflareSecretKey = strings.TrimSpace(cfg.CloudflareSecretKey)
+	return cfg
+}
+
+func normalizeCaptchaProvider(raw string) string {
+	provider := strings.ToLower(strings.TrimSpace(raw))
+	switch provider {
+	case "cloudflare":
+		return "cloudflare"
+	default:
+		return "geetest"
+	}
+}
+
+func validateCaptchaSettings(cfg CaptchaSettings) error {
+	if !cfg.Enabled {
+		return nil
+	}
+
+	switch normalizeCaptchaProvider(cfg.Provider) {
+	case "cloudflare":
+		if strings.TrimSpace(cfg.CloudflareSiteKey) == "" || strings.TrimSpace(cfg.CloudflareSecretKey) == "" {
+			return fmt.Errorf("cloudflare captcha site key and secret key are required when enabled")
+		}
+	default:
+		if strings.TrimSpace(cfg.GeetestCaptchaID) == "" || strings.TrimSpace(cfg.GeetestCaptchaKey) == "" {
+			return fmt.Errorf("geetest captcha_id and key are required when enabled")
+		}
+	}
+	return nil
 }

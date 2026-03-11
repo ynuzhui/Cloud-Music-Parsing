@@ -1,10 +1,9 @@
-﻿services:
+services:
   cloudmusic:
-    image: ynuzhui/cloudmusic:latest
-    container_name: CloudMusic
+    image: cloudmusic
+    container_name: cloudmusic
     restart: unless-stopped
     ports:
       - "8099:8099"
     volumes:
       - ./data:/app/data
-

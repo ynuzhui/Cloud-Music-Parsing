@@ -1,19 +1,19 @@
-﻿# Cloud Music Parsing
+# Cloud Music Parsing
 
 English documentation. Chinese version: [README.md](./README.md).
 
-Cloud Music Parsing is a self-hosted music parsing system.
-It currently focuses on Netease Cloud Music and is designed to be extendable to more providers (such as QQ Music) in future versions.
+Cloud Music Parsing is a self-hosted music parsing system focused on Netease Cloud Music, with an integrated frontend + backend deployment flow.
 
 ## Features
 
-- Netease song parsing with multiple quality levels
-- Netease song search
-- Netease playlist fetch and per-track parsing
-- First-run installation wizard (DB test + admin initialization)
-- Admin console (cookie management, system settings, proxy, Redis, SMTP test, dashboard)
-- Parse records and audit logs
-- Switchable cache backend (memory / Redis)
+- Netease parsing with multiple quality levels
+- Song search, playlist parsing, lyric/cover download
+- First-run installation wizard (DB test + initial admin setup)
+- Multi-user system (user / admin / super admin)
+- User groups (default group, super-admin group, daily/concurrency quota, unlimited mode)
+- Site settings (including "parse requires login")
+- Captcha support (Geetest v4 bind, Cloudflare Turnstile; disabled by default)
+- Cookie management, proxy, Redis, SMTP, dashboard, audit logs
 
 ## Tech Stack
 
@@ -27,77 +27,86 @@ It currently focuses on Netease Cloud Music and is designed to be extendable to 
 - Node.js `18+`
 - npm
 - Go `1.23+`
+- Docker / Docker Compose (optional for container deployment)
 
 ## Local Development
 
 ### 1) Install dependencies
 
 ```powershell
-cd e:\个人服务\音乐解析\codex
 npm install
-cd .\backend
+cd backend
 go mod tidy
+cd ..
 ```
 
-### 2) Prepare backend config
+### 2) Prepare data directory
 
 ```powershell
-cd e:\个人服务\音乐解析\codex
 New-Item -ItemType Directory -Path .\data -Force | Out-Null
 ```
 
-Note: `.env.example` is for reference only and is not used by the startup flow.  
-If `data/.env` is missing, it will be generated automatically after installation.
+Note: `data/.env` is generated automatically after installation.
 
-### 3) Quick start (recommended)
+### 3) Start
+
+Option A (recommended):
 
 ```powershell
-cd e:\个人服务\音乐解析\codex
 .\启动开发.ps1
 ```
 
-### 4) Manual start (optional)
+Option B (manual):
 
 Terminal A:
 
 ```powershell
-cd e:\个人服务\音乐解析\codex\backend
+cd backend
 go run ./cmd/server
 ```
 
 Terminal B:
 
 ```powershell
-cd e:\个人服务\音乐解析\codex
 npm run dev
 ```
 
-### 5) URLs
+### 4) Default URLs
 
-- Frontend: `http://127.0.0.1:8099`
-- Backend health check: `http://127.0.0.1:8098/api/health`
+- Frontend (dev): `http://127.0.0.1:8099`
+- Backend health (dev): `http://127.0.0.1:8098/api/health`
 
 ## Docker Deployment
 
-The image now bundles both frontend static assets and backend service.
-After startup, UI and API are served on the same port.
+From project root:
 
 ```powershell
-cd e:\个人服务\音乐解析\codex
+docker build -t cloudmusic .
 docker compose up -d
 ```
 
 - App URL: `http://127.0.0.1:8099`
 - Health check: `http://127.0.0.1:8099/api/health`
-- Before first install, the container runs as `root`; after installation it auto-restarts and drops to the `app` user
+- Data volume: `./data -> /app/data`
+- Image and container name: `cloudmusic`
 
-## Project Name
+Notes:
 
-- Chinese: 云音解析
-- English: Cloud Music Parsing
+- Container timezone is set to `Asia/Shanghai` (UTC+8).
+- Before installation completes, startup follows the built-in init flow; after installation it restarts and runs as the `app` user.
+
+## Installation Defaults
+
+After installation, the system ensures:
+
+- Default group: `默认组` (`默认用户组`)
+- Super admin group: `超级管理员组` (`超级管理员用户组`, unlimited mode enabled by default)
+- The super admin account is automatically assigned to the super admin group
+
+The project enforces Beijing time (UTC+8) for time/quota calculations.
 
 ## Disclaimer
 
 - This project is for technical learning and research only.
-- Please comply with applicable laws and platform terms of service.
+- Please comply with local laws and platform terms of service.
 - Please support officially licensed music content.

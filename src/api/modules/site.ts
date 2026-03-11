@@ -7,6 +7,12 @@ export type PublicSiteSettings = {
   icp_no: string;
   police_no: string;
   parse_require_login: boolean;
+  captcha?: {
+    enabled: boolean;
+    provider: "geetest" | "cloudflare";
+    geetest_captcha_id: string;
+    cloudflare_site_key: string;
+  };
   timezone: string;
 };
 

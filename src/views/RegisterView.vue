@@ -1,19 +1,31 @@
-<script setup lang="ts">
-import { reactive, ref } from "vue";
+﻿<script setup lang="ts">
+import { onMounted, reactive, ref } from "vue";
 import { useRouter } from "vue-router";
 import { createDiscreteApi } from "naive-ui";
 import { register } from "@/api/modules/auth";
+import { getPublicSiteSettings, type PublicSiteSettings } from "@/api/modules/site";
+import { resolveCaptchaPayload } from "@/utils/captcha";
 
 const router = useRouter();
 const { message } = createDiscreteApi(["message"]);
 const englishUsernamePattern = /^[A-Za-z]{4,}$/;
 
 const loading = ref(false);
+const captchaConfig = ref<PublicSiteSettings["captcha"]>();
 const form = reactive({
   username: "",
   email: "",
-  password: "",
+  password: ""
 });
+
+async function refreshCaptchaConfig(force = false) {
+  try {
+    const site = await getPublicSiteSettings(force);
+    captchaConfig.value = site.captcha;
+  } catch {
+    captchaConfig.value = undefined;
+  }
+}
 
 function isValidUsername(raw: string) {
   const value = raw.trim();
@@ -44,12 +56,23 @@ async function onRegister() {
     return;
   }
 
+  await refreshCaptchaConfig(true);
+
+  let captchaPayload;
+  try {
+    captchaPayload = await resolveCaptchaPayload(captchaConfig.value, "register");
+  } catch (error) {
+    message.warning((error as Error).message);
+    return;
+  }
+
   loading.value = true;
   try {
     await register({
       username,
       email,
       password: form.password,
+      captcha: captchaPayload
     });
     message.success("注册成功，请登录");
     router.replace("/login");
@@ -63,6 +86,10 @@ async function onRegister() {
 function goLogin() {
   router.push("/login");
 }
+
+onMounted(async () => {
+  await refreshCaptchaConfig(true);
+});
 </script>
 
 <template>

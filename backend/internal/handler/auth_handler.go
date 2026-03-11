@@ -18,21 +18,29 @@ type AuthHandler struct {
 	db             *gorm.DB
 	jwtMgr         *security.JWTManager
 	settingService *service.SettingService
+	captchaService *service.CaptchaService
 }
 
-func NewAuthHandler(db *gorm.DB, jwtMgr *security.JWTManager, settingSvc *service.SettingService) *AuthHandler {
+func NewAuthHandler(
+	db *gorm.DB,
+	jwtMgr *security.JWTManager,
+	settingSvc *service.SettingService,
+	captchaSvc *service.CaptchaService,
+) *AuthHandler {
 	return &AuthHandler{
 		db:             db,
 		jwtMgr:         jwtMgr,
 		settingService: settingSvc,
+		captchaService: captchaSvc,
 	}
 }
 
 func (h *AuthHandler) Login(c *gin.Context) {
 	var req struct {
-		Email    string `json:"email"`
-		Password string `json:"password"`
-		Remember bool   `json:"remember"`
+		Email    string                  `json:"email"`
+		Password string                  `json:"password"`
+		Remember bool                    `json:"remember"`
+		Captcha  *service.CaptchaPayload `json:"captcha"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		util.Err(c, http.StatusBadRequest, "invalid request body")
@@ -42,6 +50,12 @@ func (h *AuthHandler) Login(c *gin.Context) {
 	if !util.IsValidEmail(email) || req.Password == "" {
 		util.Err(c, http.StatusBadRequest, "valid email and password are required")
 		return
+	}
+	if h.captchaService != nil {
+		if err := h.captchaService.VerifyLogin(req.Captcha, strings.TrimSpace(c.ClientIP())); err != nil {
+			util.Err(c, http.StatusBadRequest, err.Error())
+			return
+		}
 	}
 
 	var user model.User
@@ -91,9 +105,10 @@ func (h *AuthHandler) Register(c *gin.Context) {
 		return
 	}
 	var req struct {
-		Username string `json:"username"`
-		Email    string `json:"email"`
-		Password string `json:"password"`
+		Username string                  `json:"username"`
+		Email    string                  `json:"email"`
+		Password string                  `json:"password"`
+		Captcha  *service.CaptchaPayload `json:"captcha"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		util.Err(c, http.StatusBadRequest, "invalid request body")
@@ -104,6 +119,12 @@ func (h *AuthHandler) Register(c *gin.Context) {
 	if !util.IsValidUsername(req.Username) || !util.IsValidEmail(req.Email) || len(req.Password) < 8 {
 		util.Err(c, http.StatusBadRequest, "invalid username, email or password")
 		return
+	}
+	if h.captchaService != nil {
+		if err := h.captchaService.VerifyRegister(req.Captcha, strings.TrimSpace(c.ClientIP())); err != nil {
+			util.Err(c, http.StatusBadRequest, err.Error())
+			return
+		}
 	}
 
 	user := model.User{

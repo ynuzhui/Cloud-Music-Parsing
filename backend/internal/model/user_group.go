@@ -8,6 +8,7 @@ type UserGroup struct {
 	Description string    `gorm:"size:255" json:"description"`
 	DailyLimit  int       `gorm:"not null;default:0" json:"daily_limit"`
 	Concurrency int       `gorm:"not null;default:0" json:"concurrency_limit"`
+	Unlimited   bool      `gorm:"not null;default:false" json:"unlimited_parse"`
 	IsDefault   bool      `gorm:"index;not null;default:false" json:"is_default"`
 	CreatedAt   time.Time `json:"created_at"`
 	UpdatedAt   time.Time `json:"updated_at"`

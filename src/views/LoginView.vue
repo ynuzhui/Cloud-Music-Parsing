@@ -1,20 +1,32 @@
 ﻿<script setup lang="ts">
-import { reactive, ref } from "vue";
+import { onMounted, reactive, ref } from "vue";
 import { useRouter } from "vue-router";
 import { createDiscreteApi } from "naive-ui";
 import { login } from "@/api/modules/auth";
+import { getPublicSiteSettings, type PublicSiteSettings } from "@/api/modules/site";
 import { useAuthStore } from "@/stores/auth";
+import { resolveCaptchaPayload } from "@/utils/captcha";
 
 const router = useRouter();
 const authStore = useAuthStore();
 const { message } = createDiscreteApi(["message"]);
 
 const loading = ref(false);
+const captchaConfig = ref<PublicSiteSettings["captcha"]>();
 const form = reactive({
   email: "",
   password: "",
   remember: true
 });
+
+async function refreshCaptchaConfig(force = false) {
+  try {
+    const site = await getPublicSiteSettings(force);
+    captchaConfig.value = site.captcha;
+  } catch {
+    captchaConfig.value = undefined;
+  }
+}
 
 async function onLogin() {
   if (!form.email || !form.password) {
@@ -25,9 +37,23 @@ async function onLogin() {
     message.warning("请输入有效邮箱地址");
     return;
   }
+
+  await refreshCaptchaConfig(true);
+
+  let captchaPayload;
+  try {
+    captchaPayload = await resolveCaptchaPayload(captchaConfig.value, "login");
+  } catch (error) {
+    message.warning((error as Error).message);
+    return;
+  }
+
   loading.value = true;
   try {
-    const result = await login(form);
+    const result = await login({
+      ...form,
+      captcha: captchaPayload
+    });
     authStore.setSession(result);
     message.success("登录成功");
     router.replace(authStore.isAdmin ? "/admin" : "/");
@@ -41,6 +67,10 @@ async function onLogin() {
 function goRegister() {
   router.push("/register");
 }
+
+onMounted(async () => {
+  await refreshCaptchaConfig(true);
+});
 </script>
 
 <template>
@@ -173,5 +203,3 @@ function goRegister() {
   }
 }
 </style>
-
-

@@ -36,6 +36,13 @@ type InstallDBConfig struct {
 
 const fixedSQLitePath = "app.db"
 
+const (
+	defaultUserGroupName = "默认组"
+	defaultUserGroupDesc = "默认用户组"
+	superUserGroupName   = "超级管理员组"
+	superUserGroupDesc   = "超级管理员用户组"
+)
+
 type InstallTestRequest struct {
 	Database InstallDBConfig `json:"database"`
 }
@@ -106,26 +113,44 @@ func (s *InstallService) Complete(req InstallCompleteRequest) (*InstallResult, e
 		return nil, errors.New("system already initialized")
 	}
 
-	admin := model.User{
-		Username: strings.TrimSpace(req.AdminUsername),
-		Email:    strings.TrimSpace(req.AdminEmail),
-		Role:     "super_admin",
-		Status:   "active",
-	}
-	if err := admin.SetPassword(req.AdminPassword); err != nil {
-		return nil, err
-	}
-	if err := db.Create(&admin).Error; err != nil {
-		return nil, err
-	}
-	defaultGroup := model.UserGroup{
-		Name:        "default",
-		Description: "Default group",
-		DailyLimit:  100,
-		Concurrency: 2,
-		IsDefault:   true,
-	}
-	if err := db.Create(&defaultGroup).Error; err != nil {
+	if err := db.Transaction(func(tx *gorm.DB) error {
+		defaultGroup := model.UserGroup{
+			Name:        defaultUserGroupName,
+			Description: defaultUserGroupDesc,
+			DailyLimit:  100,
+			Concurrency: 2,
+			Unlimited:   false,
+			IsDefault:   true,
+		}
+		if err := tx.Create(&defaultGroup).Error; err != nil {
+			return err
+		}
+
+		superGroup := model.UserGroup{
+			Name:        superUserGroupName,
+			Description: superUserGroupDesc,
+			DailyLimit:  0,
+			Concurrency: 0,
+			Unlimited:   true,
+			IsDefault:   false,
+		}
+		if err := tx.Create(&superGroup).Error; err != nil {
+			return err
+		}
+
+		superGroupID := superGroup.ID
+		admin := model.User{
+			Username: strings.TrimSpace(req.AdminUsername),
+			Email:    strings.TrimSpace(req.AdminEmail),
+			Role:     "super_admin",
+			Status:   "active",
+			GroupID:  &superGroupID,
+		}
+		if err := admin.SetPassword(req.AdminPassword); err != nil {
+			return err
+		}
+		return tx.Create(&admin).Error
+	}); err != nil {
 		return nil, err
 	}
 
@@ -154,6 +179,14 @@ func (s *InstallService) Complete(req InstallCompleteRequest) (*InstallResult, e
 			ParseRequireLogin:   true,
 			DefaultDailyLimit:   100,
 			DefaultConcurrency:  2,
+		},
+		Captcha: CaptchaSettings{
+			Enabled:             false,
+			Provider:            "geetest",
+			GeetestCaptchaID:    "",
+			GeetestCaptchaKey:   "",
+			CloudflareSiteKey:   "",
+			CloudflareSecretKey: "",
 		},
 		Redis: RedisSettings{
 			Enabled: false,
