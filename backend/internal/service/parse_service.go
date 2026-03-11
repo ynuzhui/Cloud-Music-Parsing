@@ -134,7 +134,7 @@ func (s *ParseService) ParseNetease(ctx context.Context, userID uint, requestIP,
 		resolvedID, resolveErr := s.resolveSongIDByRedirect(ctx, sourceURL)
 		if resolveErr != nil {
 			_ = s.recordParse(userID, requestIP, sourceURL, "", quality, false, "failed")
-			return nil, fmt.Errorf("%s (redirect resolve failed: %v)", err.Error(), resolveErr)
+			return nil, fmt.Errorf("%s（重定向解析失败：%v）", err.Error(), resolveErr)
 		}
 		songID = resolvedID
 	}
@@ -197,7 +197,7 @@ func (s *ParseService) ParseNetease(ctx context.Context, userID uint, requestIP,
 func (s *ParseService) SearchSong(ctx context.Context, keyword string, limit int) ([]SearchSongItem, error) {
 	keyword = strings.TrimSpace(keyword)
 	if keyword == "" {
-		return nil, errors.New("keyword is required")
+		return nil, errors.New("关键词不能为空")
 	}
 	if limit <= 0 || limit > 30 {
 		limit = 20
@@ -240,7 +240,7 @@ func (s *ParseService) SearchSong(ctx context.Context, keyword string, limit int
 		return nil, err
 	}
 	if result.Code != 200 {
-		return nil, fmt.Errorf("search failed with code %d", result.Code)
+		return nil, fmt.Errorf("搜索失败，错误码：%d", result.Code)
 	}
 
 	items := make([]SearchSongItem, 0, len(result.Result.Songs))
@@ -264,7 +264,7 @@ func (s *ParseService) SearchSong(ctx context.Context, keyword string, limit int
 func (s *ParseService) FetchLyric(ctx context.Context, songID string) (*LyricResult, error) {
 	songID = strings.TrimSpace(songID)
 	if !digitRegexp.MatchString(songID) {
-		return nil, errors.New("invalid song id")
+		return nil, errors.New("歌曲 ID 无效")
 	}
 
 	cacheKey := "lyric:netease:" + songID
@@ -302,7 +302,7 @@ func (s *ParseService) FetchLyric(ctx context.Context, songID string) (*LyricRes
 		return nil, err
 	}
 	if result.Code != 200 {
-		return nil, fmt.Errorf("lyric fetch failed with code %d", result.Code)
+		return nil, fmt.Errorf("歌词获取失败，错误码：%d", result.Code)
 	}
 
 	out := &LyricResult{
@@ -316,7 +316,7 @@ func (s *ParseService) FetchLyric(ctx context.Context, songID string) (*LyricRes
 func (s *ParseService) BuildLyricDownload(ctx context.Context, songID string) (string, []byte, error) {
 	songID = strings.TrimSpace(songID)
 	if !isNumericInput(songID) {
-		return "", nil, errors.New("invalid song id")
+		return "", nil, errors.New("歌曲 ID 无效")
 	}
 
 	lyric, err := s.FetchLyric(ctx, songID)
@@ -325,7 +325,7 @@ func (s *ParseService) BuildLyricDownload(ctx context.Context, songID string) (s
 	}
 	content := mergeLyricsForDownload(lyric.Lyric, lyric.TLyric)
 	if strings.TrimSpace(content) == "" {
-		return "", nil, errors.New("lyric is empty")
+		return "", nil, errors.New("歌词内容为空")
 	}
 
 	meta, metaErr := s.fetchNeteaseSongDetail(ctx, songID)
@@ -339,7 +339,7 @@ func (s *ParseService) BuildLyricDownload(ctx context.Context, songID string) (s
 func (s *ParseService) BuildCoverDownload(ctx context.Context, songID string) (string, string, []byte, error) {
 	songID = strings.TrimSpace(songID)
 	if !isNumericInput(songID) {
-		return "", "", nil, errors.New("invalid song id")
+		return "", "", nil, errors.New("歌曲 ID 无效")
 	}
 
 	meta, err := s.fetchNeteaseSongDetail(ctx, songID)
@@ -348,7 +348,7 @@ func (s *ParseService) BuildCoverDownload(ctx context.Context, songID string) (s
 	}
 	coverURL := strings.TrimSpace(meta.CoverURL)
 	if coverURL == "" {
-		return "", "", nil, errors.New("cover url is empty")
+		return "", "", nil, errors.New("封面地址为空")
 	}
 
 	client := s.buildHTTPClient()
@@ -365,7 +365,7 @@ func (s *ParseService) BuildCoverDownload(ctx context.Context, songID string) (s
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return "", "", nil, fmt.Errorf("cover upstream status: %d", resp.StatusCode)
+		return "", "", nil, fmt.Errorf("封面接口返回异常状态码：%d", resp.StatusCode)
 	}
 
 	body, err := io.ReadAll(resp.Body)
@@ -373,7 +373,7 @@ func (s *ParseService) BuildCoverDownload(ctx context.Context, songID string) (s
 		return "", "", nil, err
 	}
 	if len(body) == 0 {
-		return "", "", nil, errors.New("cover is empty")
+		return "", "", nil, errors.New("封面内容为空")
 	}
 
 	mime := strings.TrimSpace(resp.Header.Get("Content-Type"))
@@ -390,7 +390,7 @@ func (s *ParseService) FetchPlaylistTracks(ctx context.Context, rawInput string)
 	if err != nil {
 		resolvedID, resolveErr := s.resolvePlaylistIDByRedirect(ctx, rawInput)
 		if resolveErr != nil {
-			return nil, fmt.Errorf("%s (redirect resolve failed: %v)", err.Error(), resolveErr)
+			return nil, fmt.Errorf("%s（重定向解析失败：%v）", err.Error(), resolveErr)
 		}
 		playlistID = resolvedID
 	}
@@ -477,6 +477,9 @@ func (s *ParseService) fetchNeteaseLink(ctx context.Context, songID, level strin
 		"encodeType": "flac",
 		"header":     string(headerJSON),
 	}
+	if level == "sky" {
+		payload["immerseType"] = "c51"
+	}
 	rawPayload, err := marshalJSONNoEscape(payload)
 	if err != nil {
 		return "", err
@@ -496,19 +499,19 @@ func (s *ParseService) fetchNeteaseLink(ctx context.Context, songID, level strin
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(body, &result); err != nil {
-		return "", fmt.Errorf("failed to parse netease response: %w", err)
+		return "", fmt.Errorf("网易响应解析失败：%w", err)
 	}
 	if result.Code != 200 {
-		return "", fmt.Errorf("netease returned code %d", result.Code)
+		return "", fmt.Errorf("网易接口返回错误码：%d", result.Code)
 	}
 	if len(result.Data) == 0 {
-		return "", errors.New("netease returned empty data array")
+		return "", errors.New("网易接口返回数据为空")
 	}
 	if result.Data[0].Code != 200 && result.Data[0].Code != 0 {
-		return "", fmt.Errorf("netease song code %d (may require VIP or valid cookie)", result.Data[0].Code)
+		return "", fmt.Errorf("歌曲不可用，错误码：%d（可能需要 VIP 或有效 Cookie）", result.Data[0].Code)
 	}
 	if strings.TrimSpace(result.Data[0].URL) == "" {
-		return "", errors.New("netease returned empty URL (check cookie validity and VIP status)")
+		return "", errors.New("网易返回播放链接为空，请检查 Cookie 是否有效及 VIP 状态")
 	}
 	return result.Data[0].URL, nil
 }
@@ -533,7 +536,7 @@ func (s *ParseService) fetchNeteaseSongDetail(ctx context.Context, songID string
 		return nil, err
 	}
 	if len(rows) == 0 {
-		return nil, errors.New("song detail not found")
+		return nil, errors.New("未找到歌曲详情")
 	}
 	first := rows[0]
 	meta := &SongMeta{
@@ -606,7 +609,7 @@ func (s *ParseService) fetchNeteaseAlbumMeta(ctx context.Context, albumID int64)
 		return nil, err
 	}
 	if result.Code != 200 {
-		return nil, fmt.Errorf("album detail failed with code %d", result.Code)
+		return nil, fmt.Errorf("专辑详情获取失败，错误码：%d", result.Code)
 	}
 
 	artistNames := make([]string, 0, len(result.Album.Artists))
@@ -663,7 +666,7 @@ func parseSongDetailMetaRows(body []byte) ([]songDetailMetaRow, error) {
 		return nil, err
 	}
 	if result.Code != 200 {
-		return nil, fmt.Errorf("song detail failed with code %d", result.Code)
+		return nil, fmt.Errorf("歌曲详情获取失败，错误码：%d", result.Code)
 	}
 
 	rows := make([]songDetailMetaRow, 0, len(result.Songs))
@@ -732,7 +735,7 @@ func (s *ParseService) fetchPlaylistDetail(ctx context.Context, playlistID strin
 		return nil, err
 	}
 	if result.Code != 200 {
-		return nil, fmt.Errorf("playlist fetch failed with code %d", result.Code)
+		return nil, fmt.Errorf("歌单获取失败，错误码：%d", result.Code)
 	}
 
 	trackIDs := make([]int64, 0, len(result.Playlist.TrackIDs))
@@ -808,7 +811,7 @@ func parseSongDetailTracks(body []byte) ([]PlaylistTrack, error) {
 		return nil, err
 	}
 	if result.Code != 200 {
-		return nil, fmt.Errorf("song detail failed with code %d", result.Code)
+		return nil, fmt.Errorf("歌曲详情获取失败，错误码：%d", result.Code)
 	}
 
 	tracks := make([]PlaylistTrack, 0, len(result.Songs))
@@ -863,7 +866,7 @@ func (s *ParseService) doEAPIPostRaw(ctx context.Context, apiPath string, rawPay
 		return nil, err
 	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("netease upstream status: %d", resp.StatusCode)
+		return nil, fmt.Errorf("网易上游接口状态异常：%d", resp.StatusCode)
 	}
 	return body, nil
 }
@@ -957,7 +960,7 @@ var digitRegexp = regexp.MustCompile(`\d+`)
 func extractSongID(rawURL string) (string, error) {
 	rawURL = strings.TrimSpace(rawURL)
 	if rawURL == "" {
-		return "", errors.New("music url is required")
+		return "", errors.New("歌曲链接不能为空")
 	}
 	if isNumericInput(rawURL) {
 		return rawURL, nil
@@ -965,7 +968,7 @@ func extractSongID(rawURL string) (string, error) {
 
 	u, err := url.Parse(rawURL)
 	if err != nil {
-		return "", errors.New("invalid music url")
+		return "", errors.New("歌曲链接格式无效")
 	}
 
 	if id := extractIDFromQuery(u.Query()); id != "" {
@@ -979,13 +982,13 @@ func extractSongID(rawURL string) (string, error) {
 			return id, nil
 		}
 	}
-	return "", errors.New("could not find song id in url")
+	return "", errors.New("未能从链接中提取歌曲 ID")
 }
 
 func extractPlaylistID(rawInput string) (string, error) {
 	rawInput = strings.TrimSpace(rawInput)
 	if rawInput == "" {
-		return "", errors.New("playlist id is required")
+		return "", errors.New("歌单 ID 不能为空")
 	}
 	if isNumericInput(rawInput) {
 		return rawInput, nil
@@ -993,7 +996,7 @@ func extractPlaylistID(rawInput string) (string, error) {
 
 	u, err := url.Parse(rawInput)
 	if err != nil {
-		return "", errors.New("invalid playlist input")
+		return "", errors.New("歌单输入格式无效")
 	}
 	if id := extractIDFromQuery(u.Query()); id != "" {
 		return id, nil
@@ -1006,7 +1009,7 @@ func extractPlaylistID(rawInput string) (string, error) {
 			return id, nil
 		}
 	}
-	return "", errors.New("could not find playlist id in url")
+	return "", errors.New("未能从输入中提取歌单 ID")
 }
 
 func extractIDFromQuery(values url.Values) string {
@@ -1065,15 +1068,15 @@ func (s *ParseService) resolvePlaylistIDByRedirect(ctx context.Context, rawURL s
 func (s *ParseService) resolveIDByRedirect(ctx context.Context, rawURL string, extractor func(string) (string, error)) (string, error) {
 	rawURL = strings.TrimSpace(rawURL)
 	if rawURL == "" {
-		return "", errors.New("url is required")
+		return "", errors.New("链接不能为空")
 	}
 
 	parsed, err := url.Parse(rawURL)
 	if err != nil {
-		return "", errors.New("invalid url")
+		return "", errors.New("链接格式无效")
 	}
 	if parsed.Scheme != "http" && parsed.Scheme != "https" {
-		return "", errors.New("invalid url")
+		return "", errors.New("链接格式无效")
 	}
 
 	resolveCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
@@ -1082,7 +1085,7 @@ func (s *ParseService) resolveIDByRedirect(ctx context.Context, rawURL string, e
 	client := s.buildHTTPClient()
 	client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
 		if len(via) > 8 {
-			return errors.New("too many redirects")
+			return errors.New("重定向次数过多")
 		}
 		return nil
 	}
@@ -1112,13 +1115,13 @@ func (s *ParseService) resolveIDByRedirect(ctx context.Context, rawURL string, e
 			}
 		}
 	}
-	return "", errors.New("could not find id after redirect")
+	return "", errors.New("重定向后未找到 ID")
 }
 
 func normalizeQuality(input, fallback string) string {
 	q := strings.ToLower(strings.TrimSpace(input))
 	switch q {
-	case "standard", "exhigh", "lossless", "hires", "jymaster":
+	case "standard", "exhigh", "lossless", "hires", "sky", "jyeffect", "jymaster":
 		return q
 	case "master":
 		return "jymaster"
@@ -1128,7 +1131,7 @@ func normalizeQuality(input, fallback string) string {
 
 	fb := strings.ToLower(strings.TrimSpace(fallback))
 	switch fb {
-	case "standard", "exhigh", "lossless", "hires", "jymaster":
+	case "standard", "exhigh", "lossless", "hires", "sky", "jyeffect", "jymaster":
 		return fb
 	case "master":
 		return "jymaster"

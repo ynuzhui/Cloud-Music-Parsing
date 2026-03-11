@@ -41,48 +41,48 @@ onMounted(async () => {
 const menuOptions = computed<MenuOption[]>(() => {
   const options: MenuOption[] = [
     {
-      key: "/admin",
-      label: () => h(RouterLink, { to: "/admin" }, { default: () => "统计总览" }),
+      key: "/dashboard",
+      label: () => h(RouterLink, { to: "/dashboard" }, { default: () => "统计总览" }),
       icon: renderIcon(ChartPie)
     },
     {
-      key: "/admin/users",
-      label: () => h(RouterLink, { to: "/admin/users" }, { default: () => "用户管理" }),
+      key: "/dashboard/users",
+      label: () => h(RouterLink, { to: "/dashboard/users" }, { default: () => "用户管理" }),
       icon: renderIcon(Users)
     },
     {
-      key: "/admin/cookies",
-      label: () => h(RouterLink, { to: "/admin/cookies" }, { default: () => "Cookie 池" }),
+      key: "/dashboard/cookies",
+      label: () => h(RouterLink, { to: "/dashboard/cookies" }, { default: () => "Cookie 池" }),
       icon: renderIcon(Cookie)
     },
     {
-      key: "/admin/settings",
+      key: "/dashboard/settings",
       label: "系统设置",
       icon: renderIcon(Settings),
       children: [
         {
-          key: "/admin/settings",
-          label: () => h(RouterLink, { to: "/admin/settings" }, { default: () => "站点配置" }),
+          key: "/dashboard/settings",
+          label: () => h(RouterLink, { to: "/dashboard/settings" }, { default: () => "站点配置" }),
         },
         {
-          key: "/admin/settings/redis",
-          label: () => h(RouterLink, { to: "/admin/settings/redis" }, { default: () => "Redis 配置" }),
+          key: "/dashboard/settings/redis",
+          label: () => h(RouterLink, { to: "/dashboard/settings/redis" }, { default: () => "Redis 配置" }),
         },
         {
-          key: "/admin/settings/smtp",
-          label: () => h(RouterLink, { to: "/admin/settings/smtp" }, { default: () => "SMTP 配置" }),
+          key: "/dashboard/settings/smtp",
+          label: () => h(RouterLink, { to: "/dashboard/settings/smtp" }, { default: () => "SMTP 配置" }),
         },
         {
-          key: "/admin/settings/proxy",
-          label: () => h(RouterLink, { to: "/admin/settings/proxy" }, { default: () => "代理配置" }),
+          key: "/dashboard/settings/proxy",
+          label: () => h(RouterLink, { to: "/dashboard/settings/proxy" }, { default: () => "代理配置" }),
         }
       ]
     }
   ];
   if (isSuperAdmin.value) {
     options.splice(2, 0, {
-      key: "/admin/user-groups",
-      label: () => h(RouterLink, { to: "/admin/user-groups" }, { default: () => "用户组管理" }),
+      key: "/dashboard/user-groups",
+      label: () => h(RouterLink, { to: "/dashboard/user-groups" }, { default: () => "用户组管理" }),
       icon: renderIcon(Shield)
     });
   }
@@ -91,14 +91,14 @@ const menuOptions = computed<MenuOption[]>(() => {
 
 const selectedKey = computed(() => {
   const p = route.path;
-  if (p === "/admin/settings/redis") return "/admin/settings/redis";
-  if (p === "/admin/settings/smtp") return "/admin/settings/smtp";
-  if (p === "/admin/settings/proxy") return "/admin/settings/proxy";
-  if (p.startsWith("/admin/user-groups")) return "/admin/user-groups";
-  if (p.startsWith("/admin/users")) return "/admin/users";
-  if (p.startsWith("/admin/settings")) return "/admin/settings";
-  if (p.startsWith("/admin/cookies")) return "/admin/cookies";
-  return "/admin";
+  if (p === "/dashboard/settings/redis") return "/dashboard/settings/redis";
+  if (p === "/dashboard/settings/smtp") return "/dashboard/settings/smtp";
+  if (p === "/dashboard/settings/proxy") return "/dashboard/settings/proxy";
+  if (p.startsWith("/dashboard/user-groups")) return "/dashboard/user-groups";
+  if (p.startsWith("/dashboard/users")) return "/dashboard/users";
+  if (p.startsWith("/dashboard/settings")) return "/dashboard/settings";
+  if (p.startsWith("/dashboard/cookies")) return "/dashboard/cookies";
+  return "/dashboard";
 });
 
 function renderIcon(icon: any) {

@@ -31,6 +31,8 @@ export type RegisterPayload = {
   username: string;
   email: string;
   password: string;
+  confirm_password: string;
+  email_code?: string;
   captcha?: CaptchaPayload;
 };
 
@@ -44,6 +46,10 @@ export function login(payload: LoginPayload) {
 
 export function register(payload: RegisterPayload) {
   return http.post<never, RegisterResult>("/api/auth/register", payload);
+}
+
+export function sendRegisterEmailCode(email: string) {
+  return http.post<never, { sent: boolean }>("/api/auth/register/email-code", { email });
 }
 
 export function getCurrentUser() {

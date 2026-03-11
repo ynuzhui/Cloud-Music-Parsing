@@ -56,7 +56,7 @@ async function onLogin() {
     });
     authStore.setSession(result);
     message.success("登录成功");
-    router.replace(authStore.isAdmin ? "/admin" : "/");
+    router.replace(authStore.isAdmin ? "/dashboard" : "/");
   } catch (error) {
     message.error((error as Error).message);
   } finally {
@@ -82,7 +82,7 @@ onMounted(async () => {
       <div class="left-banner">
         <p class="badge">MUSIC PARSER</p>
         <h1>欢迎回来</h1>
-        <p class="desc">登录后进入管理后台，查看统计、管理 Cookie 池和系统配置。</p>
+        <p class="desc">登录后可进入数据中心，查看访问与解析趋势，管理用户、用户组、Cookie 与系统配置。</p>
       </div>
       <div class="right-form">
         <h2>用户登录</h2>

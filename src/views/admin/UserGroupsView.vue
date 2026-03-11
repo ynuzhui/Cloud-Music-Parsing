@@ -1,4 +1,4 @@
-<script setup lang="ts">
+﻿<script setup lang="ts">
 import { h, onMounted, reactive, ref } from "vue";
 import { createDiscreteApi, type DataTableColumns, NButton, NPopconfirm, NSpace, NSwitch, NTag } from "naive-ui";
 import { createUserGroup, deleteUserGroup, listUserGroups, updateUserGroup, type UserGroupItem } from "@/api/modules/admin";
@@ -15,7 +15,6 @@ const form = reactive({
   daily_limit: 0,
   concurrency_limit: 0,
   unlimited_parse: false,
-  is_default: false,
 });
 
 const editForm = reactive({
@@ -146,19 +145,6 @@ const columns: DataTableColumns<UserGroupItem> = [
   },
   { title: "成员数", key: "member_count", width: 90, align: "center" },
   {
-    title: "默认组",
-    key: "is_default",
-    width: 100,
-    align: "center",
-    render: (row) =>
-      h(NSwitch, {
-        value: !!row.is_default,
-        onUpdateValue: async (value: boolean) => {
-          await onToggleDefault(row, value);
-        },
-      }),
-  },
-  {
     title: "状态",
     key: "tag",
     width: 90,
@@ -215,7 +201,6 @@ async function onCreate() {
       daily_limit: Number(form.daily_limit) || 0,
       concurrency_limit: Number(form.concurrency_limit) || 0,
       unlimited_parse: !!form.unlimited_parse,
-      is_default: !!form.is_default,
     });
     message.success("创建成功");
     showCreate.value = false;
@@ -224,7 +209,6 @@ async function onCreate() {
     form.daily_limit = 0;
     form.concurrency_limit = 0;
     form.unlimited_parse = false;
-    form.is_default = false;
     syncCreateDraftFromForm();
     await loadRows();
   } catch (error) {
@@ -275,17 +259,6 @@ async function onSaveEdit() {
   }
 }
 
-async function onToggleDefault(row: UserGroupItem, value: boolean) {
-  if (!value) return;
-  try {
-    await updateUserGroup(row.id, { is_default: true });
-    message.success("默认组已更新");
-    await loadRows();
-  } catch (error) {
-    message.error((error as Error).message);
-  }
-}
-
 async function onDelete(row: UserGroupItem) {
   try {
     await deleteUserGroup(row.id);
@@ -325,10 +298,7 @@ onMounted(() => {
           <n-form-item-gi :span="12" label="组名">
             <n-input v-model:value="form.name" />
           </n-form-item-gi>
-          <n-form-item-gi :span="6" label="默认组">
-            <n-switch v-model:value="form.is_default" />
-          </n-form-item-gi>
-          <n-form-item-gi :span="6" label="无限解析">
+          <n-form-item-gi :span="12" label="无限解析">
             <n-switch v-model:value="form.unlimited_parse" />
           </n-form-item-gi>
           <n-form-item-gi :span="24" label="描述">

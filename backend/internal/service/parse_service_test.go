@@ -111,3 +111,29 @@ func TestExtractPlaylistID(t *testing.T) {
 		})
 	}
 }
+
+func TestNormalizeQuality(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		fallback string
+		want     string
+	}{
+		{name: "standard", input: "standard", fallback: "lossless", want: "standard"},
+		{name: "sky", input: "sky", fallback: "standard", want: "sky"},
+		{name: "jyeffect", input: "jyeffect", fallback: "standard", want: "jyeffect"},
+		{name: "master alias", input: "master", fallback: "standard", want: "jymaster"},
+		{name: "flac alias", input: "flac", fallback: "standard", want: "lossless"},
+		{name: "invalid uses fallback", input: "unknown", fallback: "sky", want: "sky"},
+		{name: "invalid fallback uses default", input: "unknown", fallback: "unknown", want: "standard"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := normalizeQuality(tt.input, tt.fallback)
+			if got != tt.want {
+				t.Fatalf("quality mismatch: got=%q want=%q", got, tt.want)
+			}
+		})
+	}
+}

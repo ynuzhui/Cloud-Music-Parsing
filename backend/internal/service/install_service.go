@@ -82,13 +82,13 @@ func (s *InstallService) TestConnection(req InstallTestRequest) error {
 
 func (s *InstallService) Complete(req InstallCompleteRequest) (*InstallResult, error) {
 	if !util.IsValidUsername(req.AdminUsername) {
-		return nil, errors.New("admin username must be >=4 English letters or >=2 Chinese characters")
+		return nil, errors.New("管理员用户名格式不正确：需以中文或英文开头，长度 2-32")
 	}
 	if !util.IsValidEmail(req.AdminEmail) {
-		return nil, errors.New("admin email is invalid")
+		return nil, errors.New("管理员邮箱格式不正确")
 	}
 	if len(req.AdminPassword) < 8 {
-		return nil, errors.New("admin password must be at least 8 characters")
+		return nil, errors.New("管理员密码至少 8 位")
 	}
 
 	db, err := openByInstallConfig(req.Database, s.resolveSQLitePath())
@@ -102,7 +102,7 @@ func (s *InstallService) Complete(req InstallCompleteRequest) (*InstallResult, e
 	defer sqlDB.Close()
 
 	if err := database.AutoMigrate(db); err != nil {
-		return nil, fmt.Errorf("migrate failed: %w", err)
+		return nil, fmt.Errorf("数据库迁移失败：%w", err)
 	}
 
 	var userCount int64
@@ -110,7 +110,7 @@ func (s *InstallService) Complete(req InstallCompleteRequest) (*InstallResult, e
 		return nil, err
 	}
 	if userCount > 0 {
-		return nil, errors.New("system already initialized")
+		return nil, errors.New("系统已初始化，请勿重复安装")
 	}
 
 	if err := db.Transaction(func(tx *gorm.DB) error {
@@ -175,10 +175,12 @@ func (s *InstallService) Complete(req InstallCompleteRequest) (*InstallResult, e
 		},
 		Feature: FeatureSettings{
 			AllowRegister:       false,
+			RegisterEmailVerify: false,
 			DefaultParseQuality: "standard",
 			ParseRequireLogin:   true,
 			DefaultDailyLimit:   100,
 			DefaultConcurrency:  2,
+			CookieAutoVerify:    false,
 		},
 		Captcha: CaptchaSettings{
 			Enabled:             false,
@@ -236,7 +238,7 @@ func (s *InstallService) Complete(req InstallCompleteRequest) (*InstallResult, e
 		envMap["MYSQL_DB"] = fallback(req.Database.MySQLDB, "music_parser")
 		envMap["MYSQL_PARAMS"] = fallback(req.Database.MySQLParam, "charset=utf8mb4&parseTime=True&loc=Local")
 	default:
-		return nil, fmt.Errorf("unsupported driver: %s", dbDriver)
+		return nil, fmt.Errorf("不支持的数据库驱动: %s", dbDriver)
 	}
 	if err := writeEnvFile(s.envFile, envMap); err != nil {
 		return nil, err
@@ -261,7 +263,7 @@ func openByInstallConfig(dbCfg InstallDBConfig, sqlitePath string) (*gorm.DB, er
 		)
 		return database.OpenForTest("mysql", "", dsn)
 	default:
-		return nil, fmt.Errorf("unsupported driver: %s", driver)
+		return nil, fmt.Errorf("不支持的数据库驱动: %s", driver)
 	}
 }
 
@@ -305,7 +307,7 @@ func writeEnvFile(path string, values map[string]string) error {
 			"MYSQL_PARAMS="+fallback(values["MYSQL_PARAMS"], "charset=utf8mb4&parseTime=True&loc=Local"),
 		)
 	default:
-		return fmt.Errorf("unsupported DB_DRIVER: %s", dbDriver)
+		return fmt.Errorf("不支持的 DB_DRIVER: %s", dbDriver)
 	}
 
 	lines = append(lines,

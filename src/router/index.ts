@@ -24,19 +24,19 @@ const router = createRouter({
     { path: "/login", component: LoginView, meta: { guest: true } },
     { path: "/register", component: RegisterView, meta: { guest: true } },
     {
-      path: "/admin",
+      path: "/dashboard",
       component: AdminLayout,
       meta: { auth: true },
-      redirect: "/admin",
+      redirect: "/dashboard",
       children: [
-        { path: "", name: "admin-dashboard", component: DashboardView, meta: { auth: true } },
-        { path: "users", name: "admin-users", component: UsersView, meta: { auth: true } },
-        { path: "user-groups", name: "admin-user-groups", component: UserGroupsView, meta: { auth: true, super: true } },
-        { path: "cookies", name: "admin-cookies", component: CookiesView, meta: { auth: true } },
-        { path: "settings", name: "admin-settings", component: SettingsView, meta: { auth: true } },
-        { path: "settings/redis", name: "admin-settings-redis", component: RedisSettingsView, meta: { auth: true } },
-        { path: "settings/smtp", name: "admin-settings-smtp", component: SmtpSettingsView, meta: { auth: true } },
-        { path: "settings/proxy", name: "admin-settings-proxy", component: ProxySettingsView, meta: { auth: true } }
+        { path: "", name: "dashboard-home", component: DashboardView, meta: { auth: true } },
+        { path: "users", name: "dashboard-users", component: UsersView, meta: { auth: true } },
+        { path: "user-groups", name: "dashboard-user-groups", component: UserGroupsView, meta: { auth: true, super: true } },
+        { path: "cookies", name: "dashboard-cookies", component: CookiesView, meta: { auth: true } },
+        { path: "settings", name: "dashboard-settings", component: SettingsView, meta: { auth: true } },
+        { path: "settings/redis", name: "dashboard-settings-redis", component: RedisSettingsView, meta: { auth: true } },
+        { path: "settings/smtp", name: "dashboard-settings-smtp", component: SmtpSettingsView, meta: { auth: true } },
+        { path: "settings/proxy", name: "dashboard-settings-proxy", component: ProxySettingsView, meta: { auth: true } }
       ]
     }
   ]
@@ -56,17 +56,17 @@ router.beforeEach(async (to) => {
   }
 
   if ((to.path === "/login" || to.path === "/register") && authStore.isAuthed) {
-    return authStore.isAdmin ? "/admin" : "/";
+    return authStore.isAdmin ? "/dashboard" : "/";
   }
 
   if (to.meta.auth && !authStore.isAuthed) {
     return "/login";
   }
-  if (to.path.startsWith("/admin") && !authStore.isAdmin) {
+  if (to.path.startsWith("/dashboard") && !authStore.isAdmin) {
     return "/";
   }
   if (to.meta.super && !authStore.isSuperAdmin) {
-    return "/admin";
+    return "/dashboard";
   }
 
   return true;

@@ -120,7 +120,7 @@ async function onCompleteInstall() {
     return;
   }
   if (!adminReady.value) {
-    message.warning("请完善管理员信息（用户名需>=4个英文字符或>=2个中文字符，邮箱有效，密码至少8位）");
+    message.warning("请完善管理员信息（用户名需中文或英文开头，长度 2-32；邮箱有效；密码至少 8 位）");
     return;
   }
 
@@ -242,10 +242,10 @@ function sleep(ms: number) {
               <n-form label-placement="top" :show-feedback="false">
                 <n-grid :x-gap="18" :y-gap="14" :cols="24">
                   <n-form-item-gi :span="24" label="管理员用户名">
-                    <n-input v-model:value="adminForm.admin_username" placeholder="至少4个英文字符，或至少2个中文字符" size="large" />
+                    <n-input v-model:value="adminForm.admin_username" placeholder="请输入用户名（中文或英文开头）" size="large" />
                   </n-form-item-gi>
                   <n-form-item-gi :span="24" label="管理员邮箱">
-                    <n-input v-model:value="adminForm.admin_email" placeholder="admin@example.com" size="large" />
+                    <n-input v-model:value="adminForm.admin_email" placeholder="例如：admin@example.com" size="large" />
                   </n-form-item-gi>
                   <n-form-item-gi :span="24" label="管理员密码">
                     <n-input v-model:value="adminForm.admin_password" type="password" show-password-on="click" placeholder="请输入密码（至少 8 位）" size="large" />

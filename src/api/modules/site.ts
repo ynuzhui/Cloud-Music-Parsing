@@ -6,6 +6,8 @@ export type PublicSiteSettings = {
   description: string;
   icp_no: string;
   police_no: string;
+  allow_register: boolean;
+  register_email_verify: boolean;
   parse_require_login: boolean;
   captcha?: {
     enabled: boolean;

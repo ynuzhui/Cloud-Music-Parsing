@@ -32,13 +32,16 @@ func (h *UserAdminHandler) ListUsers(c *gin.Context) {
 	page := parseIntWithRange(c.Query("page"), 1, 1, 1000000)
 	pageSize := parseIntWithRange(c.Query("page_size"), 20, 1, 100)
 	keyword := strings.TrimSpace(c.Query("keyword"))
+	if keyword == "" {
+		keyword = strings.TrimSpace(c.Query("username"))
+	}
 	role := strings.TrimSpace(c.Query("role"))
 	status := strings.TrimSpace(c.Query("status"))
 
 	query := h.db.Model(&model.User{})
 	if keyword != "" {
 		like := "%" + keyword + "%"
-		query = query.Where("username LIKE ? OR email LIKE ?", like, like)
+		query = query.Where("username LIKE ?", like)
 	}
 	if role != "" {
 		query = query.Where("role = ?", role)
@@ -59,9 +62,10 @@ func (h *UserAdminHandler) ListUsers(c *gin.Context) {
 		return
 	}
 
-	groupNameMap := h.groupNameMap(users)
+	groupMetaMap := h.groupMetaMap(users)
 	items := make([]gin.H, 0, len(users))
 	for _, user := range users {
+		meta := groupMetaMap[groupIDValue(user.GroupID)]
 		items = append(items, gin.H{
 			"id":                user.ID,
 			"username":          user.Username,
@@ -69,7 +73,8 @@ func (h *UserAdminHandler) ListUsers(c *gin.Context) {
 			"role":              user.Role,
 			"status":            user.Status,
 			"group_id":          user.GroupID,
-			"group_name":        groupNameMap[groupIDValue(user.GroupID)],
+			"group_name":        meta.Name,
+			"group_unlimited":   meta.Unlimited,
 			"daily_limit":       user.DailyLimit,
 			"concurrency_limit": user.Concurrency,
 			"last_login_at":     user.LastLoginAt,
@@ -88,12 +93,6 @@ func (h *UserAdminHandler) ListUsers(c *gin.Context) {
 }
 
 func (h *UserAdminHandler) CreateUser(c *gin.Context) {
-	actor, ok := getActorClaims(c)
-	if !ok {
-		util.Err(c, http.StatusUnauthorized, "missing auth context")
-		return
-	}
-
 	var req struct {
 		Username         string `json:"username"`
 		Email            string `json:"email"`
@@ -105,14 +104,18 @@ func (h *UserAdminHandler) CreateUser(c *gin.Context) {
 		Status           string `json:"status"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		util.Err(c, http.StatusBadRequest, "invalid request body")
+		util.Err(c, http.StatusBadRequest, "请求参数格式错误")
 		return
 	}
 
 	req.Username = strings.TrimSpace(req.Username)
 	req.Email = strings.TrimSpace(req.Email)
-	if !util.IsValidUsername(req.Username) || !util.IsValidEmail(req.Email) || len(req.Password) < 8 {
-		util.Err(c, http.StatusBadRequest, "invalid username, email or password")
+	if !util.IsValidUsername(req.Username) {
+		util.Err(c, http.StatusBadRequest, "用户名需以中文或英文开头，长度 2-32，可包含数字、下划线和短横线")
+		return
+	}
+	if !util.IsValidEmail(req.Email) || len(req.Password) < 8 {
+		util.Err(c, http.StatusBadRequest, "邮箱或密码格式不正确")
 		return
 	}
 
@@ -121,15 +124,9 @@ func (h *UserAdminHandler) CreateUser(c *gin.Context) {
 		util.Err(c, http.StatusBadRequest, err.Error())
 		return
 	}
-	if role == "super_admin" && actor.Role != "super_admin" {
-		util.Err(c, http.StatusForbidden, "super admin required")
-		return
-	}
 	if role == "super_admin" {
-		if err := h.ensureNoOtherSuperAdmin(0); err != nil {
-			util.Err(c, http.StatusBadRequest, err.Error())
-			return
-		}
+		util.Err(c, http.StatusBadRequest, "超级管理员固定为 ID=1，不可新增或转让")
+		return
 	}
 	status, err := normalizeStatus(req.Status, "active")
 	if err != nil {
@@ -142,14 +139,6 @@ func (h *UserAdminHandler) CreateUser(c *gin.Context) {
 		util.Err(c, http.StatusBadRequest, err.Error())
 		return
 	}
-	if role == "super_admin" {
-		superGroupID, groupErr := h.ensureSuperAdminGroup()
-		if groupErr != nil {
-			util.Err(c, http.StatusInternalServerError, groupErr.Error())
-			return
-		}
-		groupID = superGroupID
-	}
 
 	user := model.User{
 		Username:     req.Username,
@@ -161,12 +150,16 @@ func (h *UserAdminHandler) CreateUser(c *gin.Context) {
 		DailyLimit:   maxInt(req.DailyLimit, 0),
 		Concurrency:  maxInt(req.ConcurrencyLimit, 0),
 	}
+	if err := h.applyGroupQuotaInheritance(&user, true); err != nil {
+		util.Err(c, http.StatusInternalServerError, err.Error())
+		return
+	}
 	if err := user.SetPassword(req.Password); err != nil {
-		util.Err(c, http.StatusInternalServerError, "failed to set password")
+		util.Err(c, http.StatusInternalServerError, "设置密码失败")
 		return
 	}
 	if err := h.db.Create(&user).Error; err != nil {
-		util.Err(c, http.StatusConflict, "username or email already exists")
+		util.Err(c, http.StatusConflict, "用户名或邮箱已存在")
 		return
 	}
 
@@ -176,22 +169,22 @@ func (h *UserAdminHandler) CreateUser(c *gin.Context) {
 func (h *UserAdminHandler) UpdateUser(c *gin.Context) {
 	actor, ok := getActorClaims(c)
 	if !ok {
-		util.Err(c, http.StatusUnauthorized, "missing auth context")
+		util.Err(c, http.StatusUnauthorized, "缺少登录信息")
 		return
 	}
 
 	id, err := strconv.Atoi(c.Param("id"))
 	if err != nil || id <= 0 {
-		util.Err(c, http.StatusBadRequest, "invalid user id")
+		util.Err(c, http.StatusBadRequest, "用户 ID 无效")
 		return
 	}
 	var user model.User
 	if err := h.db.First(&user, id).Error; err != nil {
-		util.Err(c, http.StatusNotFound, "user not found")
+		util.Err(c, http.StatusNotFound, "用户不存在")
 		return
 	}
 	if user.Role == "super_admin" && actor.Role != "super_admin" {
-		util.Err(c, http.StatusForbidden, "super admin required")
+		util.Err(c, http.StatusForbidden, "仅超级管理员可修改该用户")
 		return
 	}
 
@@ -203,14 +196,14 @@ func (h *UserAdminHandler) UpdateUser(c *gin.Context) {
 		ConcurrencyLimit *int    `json:"concurrency_limit"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		util.Err(c, http.StatusBadRequest, "invalid request body")
+		util.Err(c, http.StatusBadRequest, "请求参数格式错误")
 		return
 	}
 
 	if req.Username != nil {
 		username := strings.TrimSpace(*req.Username)
 		if !util.IsValidUsername(username) {
-			util.Err(c, http.StatusBadRequest, "invalid username")
+			util.Err(c, http.StatusBadRequest, "用户名需以中文或英文开头，长度 2-32，可包含数字、下划线和短横线")
 			return
 		}
 		user.Username = username
@@ -218,7 +211,7 @@ func (h *UserAdminHandler) UpdateUser(c *gin.Context) {
 	if req.Email != nil {
 		email := strings.TrimSpace(*req.Email)
 		if !util.IsValidEmail(email) {
-			util.Err(c, http.StatusBadRequest, "invalid email")
+			util.Err(c, http.StatusBadRequest, "邮箱格式不正确")
 			return
 		}
 		user.Email = email
@@ -237,7 +230,7 @@ func (h *UserAdminHandler) UpdateUser(c *gin.Context) {
 	if req.ConcurrencyLimit != nil {
 		user.Concurrency = maxInt(*req.ConcurrencyLimit, 0)
 	}
-	if user.Role == "super_admin" {
+	if user.ID == 1 || user.Role == "super_admin" {
 		superGroupID, groupErr := h.ensureSuperAdminGroup()
 		if groupErr != nil {
 			util.Err(c, http.StatusInternalServerError, groupErr.Error())
@@ -245,9 +238,13 @@ func (h *UserAdminHandler) UpdateUser(c *gin.Context) {
 		}
 		user.GroupID = superGroupID
 	}
+	if err := h.applyGroupQuotaInheritance(&user, false); err != nil {
+		util.Err(c, http.StatusInternalServerError, err.Error())
+		return
+	}
 
 	if err := h.db.Save(&user).Error; err != nil {
-		util.Err(c, http.StatusConflict, "username or email already exists")
+		util.Err(c, http.StatusConflict, "用户名或邮箱已存在")
 		return
 	}
 	util.OK(c, gin.H{"updated": true})
@@ -256,22 +253,22 @@ func (h *UserAdminHandler) UpdateUser(c *gin.Context) {
 func (h *UserAdminHandler) UpdateUserStatus(c *gin.Context) {
 	actor, ok := getActorClaims(c)
 	if !ok {
-		util.Err(c, http.StatusUnauthorized, "missing auth context")
+		util.Err(c, http.StatusUnauthorized, "缺少登录信息")
 		return
 	}
 
 	id, err := strconv.Atoi(c.Param("id"))
 	if err != nil || id <= 0 {
-		util.Err(c, http.StatusBadRequest, "invalid user id")
+		util.Err(c, http.StatusBadRequest, "用户 ID 无效")
 		return
 	}
 	var user model.User
 	if err := h.db.First(&user, id).Error; err != nil {
-		util.Err(c, http.StatusNotFound, "user not found")
+		util.Err(c, http.StatusNotFound, "用户不存在")
 		return
 	}
 	if user.Role == "super_admin" && actor.Role != "super_admin" {
-		util.Err(c, http.StatusForbidden, "super admin required")
+		util.Err(c, http.StatusForbidden, "仅超级管理员可修改该用户")
 		return
 	}
 
@@ -279,15 +276,15 @@ func (h *UserAdminHandler) UpdateUserStatus(c *gin.Context) {
 		Active bool `json:"active"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		util.Err(c, http.StatusBadRequest, "invalid request body")
+		util.Err(c, http.StatusBadRequest, "请求参数格式错误")
 		return
 	}
 	nextStatus := "disabled"
 	if req.Active {
 		nextStatus = "active"
 	}
-	if user.Role == "super_admin" && nextStatus != "active" {
-		util.Err(c, http.StatusBadRequest, "super admin cannot be disabled")
+	if user.ID == 1 && nextStatus != "active" {
+		util.Err(c, http.StatusBadRequest, "超级管理员（ID=1）不可被禁用")
 		return
 	}
 	if user.Status != nextStatus {
@@ -304,18 +301,18 @@ func (h *UserAdminHandler) UpdateUserStatus(c *gin.Context) {
 func (h *UserAdminHandler) SetUserRole(c *gin.Context) {
 	_, ok := getActorClaims(c)
 	if !ok {
-		util.Err(c, http.StatusUnauthorized, "missing auth context")
+		util.Err(c, http.StatusUnauthorized, "缺少登录信息")
 		return
 	}
 
 	id, err := strconv.Atoi(c.Param("id"))
 	if err != nil || id <= 0 {
-		util.Err(c, http.StatusBadRequest, "invalid user id")
+		util.Err(c, http.StatusBadRequest, "用户 ID 无效")
 		return
 	}
 	var target model.User
 	if err := h.db.First(&target, id).Error; err != nil {
-		util.Err(c, http.StatusNotFound, "user not found")
+		util.Err(c, http.StatusNotFound, "用户不存在")
 		return
 	}
 
@@ -323,7 +320,7 @@ func (h *UserAdminHandler) SetUserRole(c *gin.Context) {
 		Role string `json:"role"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		util.Err(c, http.StatusBadRequest, "invalid request body")
+		util.Err(c, http.StatusBadRequest, "请求参数格式错误")
 		return
 	}
 	role, err := normalizeRole(req.Role, "")
@@ -332,16 +329,12 @@ func (h *UserAdminHandler) SetUserRole(c *gin.Context) {
 		return
 	}
 
-	if role == "super_admin" {
-		if err := h.transferSuperAdmin(uint(id)); err != nil {
-			util.Err(c, http.StatusBadRequest, err.Error())
-			return
-		}
-		util.OK(c, gin.H{"updated": true})
+	if target.ID == 1 || target.Role == "super_admin" {
+		util.Err(c, http.StatusBadRequest, "超级管理员固定为 ID=1，不可转让或降级")
 		return
 	}
-	if target.Role == "super_admin" && role != "super_admin" {
-		util.Err(c, http.StatusBadRequest, "must transfer super admin role instead of demoting directly")
+	if role == "super_admin" {
+		util.Err(c, http.StatusBadRequest, "超级管理员固定为 ID=1，不可转让")
 		return
 	}
 	if target.Role != role {
@@ -358,22 +351,22 @@ func (h *UserAdminHandler) SetUserRole(c *gin.Context) {
 func (h *UserAdminHandler) ResetUserPassword(c *gin.Context) {
 	actor, ok := getActorClaims(c)
 	if !ok {
-		util.Err(c, http.StatusUnauthorized, "missing auth context")
+		util.Err(c, http.StatusUnauthorized, "缺少登录信息")
 		return
 	}
 
 	id, err := strconv.Atoi(c.Param("id"))
 	if err != nil || id <= 0 {
-		util.Err(c, http.StatusBadRequest, "invalid user id")
+		util.Err(c, http.StatusBadRequest, "用户 ID 无效")
 		return
 	}
 	var target model.User
 	if err := h.db.First(&target, id).Error; err != nil {
-		util.Err(c, http.StatusNotFound, "user not found")
+		util.Err(c, http.StatusNotFound, "用户不存在")
 		return
 	}
 	if target.Role == "super_admin" && actor.Role != "super_admin" {
-		util.Err(c, http.StatusForbidden, "super admin required")
+		util.Err(c, http.StatusForbidden, "仅超级管理员可修改该用户")
 		return
 	}
 
@@ -381,15 +374,15 @@ func (h *UserAdminHandler) ResetUserPassword(c *gin.Context) {
 		Password string `json:"password"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		util.Err(c, http.StatusBadRequest, "invalid request body")
+		util.Err(c, http.StatusBadRequest, "请求参数格式错误")
 		return
 	}
 	if len(req.Password) < 8 {
-		util.Err(c, http.StatusBadRequest, "password must be at least 8 characters")
+		util.Err(c, http.StatusBadRequest, "密码至少 8 位")
 		return
 	}
 	if err := target.SetPassword(req.Password); err != nil {
-		util.Err(c, http.StatusInternalServerError, "failed to set password")
+		util.Err(c, http.StatusInternalServerError, "设置密码失败")
 		return
 	}
 	target.TokenVersion++
@@ -451,12 +444,12 @@ func (h *UserAdminHandler) CreateUserGroup(c *gin.Context) {
 		IsDefault        bool   `json:"is_default"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		util.Err(c, http.StatusBadRequest, "invalid request body")
+		util.Err(c, http.StatusBadRequest, "请求参数格式错误")
 		return
 	}
 	req.Name = strings.TrimSpace(req.Name)
 	if req.Name == "" {
-		util.Err(c, http.StatusBadRequest, "name is required")
+		util.Err(c, http.StatusBadRequest, "用户组名称不能为空")
 		return
 	}
 
@@ -476,7 +469,7 @@ func (h *UserAdminHandler) CreateUserGroup(c *gin.Context) {
 		}
 		return tx.Create(&group).Error
 	}); err != nil {
-		util.Err(c, http.StatusConflict, "group name already exists")
+		util.Err(c, http.StatusConflict, "用户组名称已存在")
 		return
 	}
 	util.OK(c, gin.H{"id": group.ID})
@@ -485,12 +478,12 @@ func (h *UserAdminHandler) CreateUserGroup(c *gin.Context) {
 func (h *UserAdminHandler) UpdateUserGroup(c *gin.Context) {
 	id, err := strconv.Atoi(c.Param("id"))
 	if err != nil || id <= 0 {
-		util.Err(c, http.StatusBadRequest, "invalid group id")
+		util.Err(c, http.StatusBadRequest, "用户组 ID 无效")
 		return
 	}
 	var group model.UserGroup
 	if err := h.db.First(&group, id).Error; err != nil {
-		util.Err(c, http.StatusNotFound, "group not found")
+		util.Err(c, http.StatusNotFound, "用户组不存在")
 		return
 	}
 
@@ -503,14 +496,14 @@ func (h *UserAdminHandler) UpdateUserGroup(c *gin.Context) {
 		IsDefault        *bool   `json:"is_default"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		util.Err(c, http.StatusBadRequest, "invalid request body")
+		util.Err(c, http.StatusBadRequest, "请求参数格式错误")
 		return
 	}
 
 	if req.Name != nil {
 		name := strings.TrimSpace(*req.Name)
 		if name == "" {
-			util.Err(c, http.StatusBadRequest, "name cannot be empty")
+			util.Err(c, http.StatusBadRequest, "用户组名称不能为空")
 			return
 		}
 		group.Name = name
@@ -539,7 +532,7 @@ func (h *UserAdminHandler) UpdateUserGroup(c *gin.Context) {
 		}
 		return tx.Save(&group).Error
 	}); err != nil {
-		util.Err(c, http.StatusConflict, "group name already exists")
+		util.Err(c, http.StatusConflict, "用户组名称已存在")
 		return
 	}
 	util.OK(c, gin.H{"updated": true})
@@ -548,16 +541,16 @@ func (h *UserAdminHandler) UpdateUserGroup(c *gin.Context) {
 func (h *UserAdminHandler) DeleteUserGroup(c *gin.Context) {
 	id, err := strconv.Atoi(c.Param("id"))
 	if err != nil || id <= 0 {
-		util.Err(c, http.StatusBadRequest, "invalid group id")
+		util.Err(c, http.StatusBadRequest, "用户组 ID 无效")
 		return
 	}
 	var group model.UserGroup
 	if err := h.db.First(&group, id).Error; err != nil {
-		util.Err(c, http.StatusNotFound, "group not found")
+		util.Err(c, http.StatusNotFound, "用户组不存在")
 		return
 	}
 	if group.IsDefault {
-		util.Err(c, http.StatusBadRequest, "default group cannot be deleted")
+		util.Err(c, http.StatusBadRequest, "默认用户组不可删除")
 		return
 	}
 
@@ -567,7 +560,7 @@ func (h *UserAdminHandler) DeleteUserGroup(c *gin.Context) {
 		return
 	}
 	if count > 0 {
-		util.Err(c, http.StatusBadRequest, "group has users, cannot delete")
+		util.Err(c, http.StatusBadRequest, "该用户组下仍有用户，无法删除")
 		return
 	}
 	if err := h.db.Delete(&model.UserGroup{}, group.ID).Error; err != nil {
@@ -575,60 +568,6 @@ func (h *UserAdminHandler) DeleteUserGroup(c *gin.Context) {
 		return
 	}
 	util.OK(c, gin.H{"deleted": true})
-}
-
-func (h *UserAdminHandler) transferSuperAdmin(targetID uint) error {
-	if targetID == 0 {
-		return errors.New("invalid target user")
-	}
-	return h.db.Transaction(func(tx *gorm.DB) error {
-		superGroupID, err := h.ensureSuperAdminGroupWithDB(tx)
-		if err != nil {
-			return err
-		}
-		var target model.User
-		if err := tx.First(&target, targetID).Error; err != nil {
-			return err
-		}
-		var current model.User
-		err = tx.Where("role = ? AND id <> ?", "super_admin", targetID).First(&current).Error
-		if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
-			return err
-		}
-		if err == nil {
-			if err := tx.Model(&model.User{}).
-				Where("id = ?", current.ID).
-				Updates(map[string]any{
-					"role":          "admin",
-					"token_version": gorm.Expr("token_version + 1"),
-				}).Error; err != nil {
-				return err
-			}
-		}
-		return tx.Model(&model.User{}).
-			Where("id = ?", targetID).
-			Updates(map[string]any{
-				"role":          "super_admin",
-				"status":        "active",
-				"group_id":      superGroupID,
-				"token_version": gorm.Expr("token_version + 1"),
-			}).Error
-	})
-}
-
-func (h *UserAdminHandler) ensureNoOtherSuperAdmin(excludeUserID uint) error {
-	query := h.db.Model(&model.User{}).Where("role = ?", "super_admin")
-	if excludeUserID > 0 {
-		query = query.Where("id <> ?", excludeUserID)
-	}
-	var count int64
-	if err := query.Count(&count).Error; err != nil {
-		return err
-	}
-	if count > 0 {
-		return errors.New("super admin can only be one")
-	}
-	return nil
 }
 
 func (h *UserAdminHandler) normalizeGroupID(groupID *uint, useDefaultWhenNil bool) (*uint, error) {
@@ -651,12 +590,17 @@ func (h *UserAdminHandler) normalizeGroupID(groupID *uint, useDefaultWhenNil boo
 		return nil, err
 	}
 	if count == 0 {
-		return nil, errors.New("group not found")
+		return nil, errors.New("用户组不存在")
 	}
 	return groupID, nil
 }
 
-func (h *UserAdminHandler) groupNameMap(users []model.User) map[uint]string {
+type userGroupMeta struct {
+	Name      string
+	Unlimited bool
+}
+
+func (h *UserAdminHandler) groupMetaMap(users []model.User) map[uint]userGroupMeta {
 	ids := make([]uint, 0, len(users))
 	seen := make(map[uint]struct{}, len(users))
 	for _, user := range users {
@@ -670,17 +614,43 @@ func (h *UserAdminHandler) groupNameMap(users []model.User) map[uint]string {
 		ids = append(ids, *user.GroupID)
 	}
 	if len(ids) == 0 {
-		return map[uint]string{}
+		return map[uint]userGroupMeta{}
 	}
 	var groups []model.UserGroup
-	if err := h.db.Select("id", "name").Where("id IN ?", ids).Find(&groups).Error; err != nil {
-		return map[uint]string{}
+	if err := h.db.Select("id", "name", "unlimited").Where("id IN ?", ids).Find(&groups).Error; err != nil {
+		return map[uint]userGroupMeta{}
 	}
-	out := make(map[uint]string, len(groups))
+	out := make(map[uint]userGroupMeta, len(groups))
 	for _, group := range groups {
-		out[group.ID] = group.Name
+		out[group.ID] = userGroupMeta{
+			Name:      group.Name,
+			Unlimited: group.Unlimited,
+		}
 	}
 	return out
+}
+
+func (h *UserAdminHandler) applyGroupQuotaInheritance(user *model.User, force bool) error {
+	if user.GroupID == nil || *user.GroupID == 0 {
+		return nil
+	}
+	var group model.UserGroup
+	if err := h.db.Select("id", "daily_limit", "concurrency", "unlimited").First(&group, *user.GroupID).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil
+		}
+		return err
+	}
+	if group.Unlimited {
+		user.DailyLimit = 0
+		user.Concurrency = 0
+		return nil
+	}
+	if force {
+		user.DailyLimit = maxInt(group.DailyLimit, 0)
+		user.Concurrency = maxInt(group.Concurrency, 0)
+	}
+	return nil
 }
 
 func (h *UserAdminHandler) ensureSuperAdminGroup() (*uint, error) {
@@ -747,7 +717,7 @@ func normalizeRole(raw, fallback string) (string, error) {
 	case "user", "admin", "super_admin":
 		return role, nil
 	default:
-		return "", errors.New("invalid role")
+		return "", errors.New("角色无效")
 	}
 }
 
@@ -760,7 +730,7 @@ func normalizeStatus(raw, fallback string) (string, error) {
 	case "active", "disabled":
 		return status, nil
 	default:
-		return "", errors.New("invalid status")
+		return "", errors.New("状态无效")
 	}
 }
 

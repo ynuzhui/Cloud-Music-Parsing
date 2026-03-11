@@ -51,13 +51,13 @@ func (s *QuotaService) AcquireParseQuota(userID uint, requestIP string) (func(),
 		return nil, nil, err
 	}
 	if effective.DailyLimit > 0 && used >= int64(effective.DailyLimit) {
-		return nil, nil, errors.New("daily parse limit reached")
+		return nil, nil, errors.New("已达到每日解析次数上限")
 	}
 
 	key := s.concurrentKey(userID, requestIP)
 	current := s.getInFlight(key)
 	if effective.ConcurrencyLimit > 0 && current >= effective.ConcurrencyLimit {
-		return nil, nil, errors.New("concurrency limit reached")
+		return nil, nil, errors.New("已达到并发上限")
 	}
 
 	s.incInFlight(key, 1)
@@ -112,7 +112,7 @@ func (s *QuotaService) Today(userID uint, requestIP string) (*QuotaSnapshot, err
 
 func (s *QuotaService) Trend(userID uint, days int) ([]DayCount, error) {
 	if userID == 0 {
-		return nil, errors.New("login required")
+		return nil, errors.New("请先登录")
 	}
 	if days <= 0 || days > 31 {
 		days = 7

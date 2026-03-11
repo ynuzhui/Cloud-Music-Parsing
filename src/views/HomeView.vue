@@ -15,7 +15,6 @@ import {
   type LyricResult,
 } from "@/api/modules/music";
 import { getPublicSiteSettings } from "@/api/modules/site";
-import { getUserQuotaToday, getUserUsageTrend, type UserQuotaToday, type UserUsageTrend } from "@/api/modules/user";
 import { useAuthStore } from "@/stores/auth";
 import { useSettingsStore } from "@/stores/settings";
 import { useRouter } from "vue-router";
@@ -61,9 +60,6 @@ const footerRecord = ref<{ icpNo: string; policeNo: string }>({
 });
 const hasFooterRecord = computed(() => !!(footerRecord.value.icpNo || footerRecord.value.policeNo));
 const parseRequireLogin = ref(true);
-const quotaLoading = ref(false);
-const quotaToday = ref<UserQuotaToday | null>(null);
-const quotaTrend = ref<UserUsageTrend["items"]>([]);
 const policeRecordLink = computed(() => {
   const no = (footerRecord.value.policeNo || "").trim();
   if (!no) return POLICE_RECORD_BASE_LINK;
@@ -105,6 +101,8 @@ const quality = computed({
 
 const qualityOptions = [
   { label: "超清母带", value: "jymaster", short: "超清母带" },
+  { label: "高清环绕声", value: "jyeffect", short: "高清环绕" },
+  { label: "沉浸环绕声", value: "sky", short: "沉浸环绕" },
   { label: "高解析度无损", value: "hires", short: "Hi-Res" },
   { label: "无损", value: "lossless", short: "无损" },
   { label: "极高", value: "exhigh", short: "极高" },
@@ -143,25 +141,6 @@ function requireAuth(): boolean {
   return true;
 }
 
-async function loadUserQuota() {
-  if (!authStore.isAuthed) {
-    quotaToday.value = null;
-    quotaTrend.value = [];
-    return;
-  }
-  quotaLoading.value = true;
-  try {
-    const [today, trend] = await Promise.all([getUserQuotaToday(), getUserUsageTrend(7)]);
-    quotaToday.value = today;
-    quotaTrend.value = trend.items || [];
-  } catch {
-    quotaToday.value = null;
-    quotaTrend.value = [];
-  } finally {
-    quotaLoading.value = false;
-  }
-}
-
 async function onSearch() {
   if (!requireAuth()) return;
   if (searching.value) return;
@@ -197,9 +176,6 @@ async function onParseSong(songId: number) {
   destroyPlayer();
   try {
     parseResult.value = await parseMusic(String(songId), quality.value);
-    if (authStore.isAuthed) {
-      void loadUserQuota();
-    }
     message.success("解析成功");
     await nextTick();
     initPlayer();
@@ -226,9 +202,6 @@ async function onParseById() {
   destroyPlayer();
   try {
     parseResult.value = await parseMusic(input, quality.value);
-    if (authStore.isAuthed) {
-      void loadUserQuota();
-    }
     message.success("解析成功");
     await nextTick();
     initPlayer();
@@ -274,9 +247,6 @@ async function onParseTrack(trackId: number) {
   destroyPlayer();
   try {
     const result = await parseMusic(String(trackId), quality.value);
-    if (authStore.isAuthed) {
-      void loadUserQuota();
-    }
     playlistResults.value[trackId] = result;
     parseResult.value = result;
     message.success("解析成功");
@@ -638,9 +608,6 @@ onMounted(async () => {
   } catch {
     // ignore
   }
-  if (authStore.isAuthed) {
-    void loadUserQuota();
-  }
 });
 
 onUnmounted(() => {
@@ -677,44 +644,10 @@ onUnmounted(() => {
         </div>
 
         <div class="quality-card glass-card">
-          <div class="card-title"><n-icon size="16" color="var(--brand)"><Headphones /></n-icon><span>全局音质选择</span></div>
+          <div class="card-title"><n-icon size="16" color="var(--brand)"><Headphones /></n-icon><span>音质选择</span></div>
           <div class="quality-tags">
             <button v-for="opt in qualityOptions" :key="opt.value" :class="['quality-tag', { active: quality === opt.value }]" @click="quality = opt.value">{{ opt.short }}</button>
           </div>
-        </div>
-
-        <div v-if="authStore.isAuthed" class="quota-card glass-card">
-          <div class="card-title"><n-icon size="16" color="var(--brand)"><Headphones /></n-icon><span>今日额度</span></div>
-          <n-spin :show="quotaLoading">
-            <div v-if="quotaToday" class="quota-grid">
-              <div class="quota-item">
-                <span class="quota-label">已用次数</span>
-                <strong>{{ quotaToday.used }}</strong>
-              </div>
-              <div class="quota-item">
-                <span class="quota-label">每日上限</span>
-                <strong>{{ quotaToday.daily_limit <= 0 ? "无限制" : quotaToday.daily_limit }}</strong>
-              </div>
-              <div class="quota-item">
-                <span class="quota-label">剩余次数</span>
-                <strong>{{ quotaToday.remaining < 0 ? "无限制" : quotaToday.remaining }}</strong>
-              </div>
-              <div class="quota-item">
-                <span class="quota-label">并发占用</span>
-                <strong>{{ quotaToday.in_flight }} / {{ quotaToday.concurrency_limit <= 0 ? "无限制" : quotaToday.concurrency_limit }}</strong>
-              </div>
-            </div>
-            <div v-if="quotaTrend.length" class="trend-wrap">
-              <div class="trend-title">近 7 天解析次数（北京时间）</div>
-              <div class="trend-list">
-                <div v-for="row in quotaTrend" :key="row.day" class="trend-row">
-                  <span class="trend-day">{{ row.day.slice(5) }}</span>
-                  <div class="trend-bar"><i :style="{ width: `${Math.max(6, row.count * 12)}px` }"></i></div>
-                  <span class="trend-count">{{ row.count }}</span>
-                </div>
-              </div>
-            </div>
-          </n-spin>
         </div>
 
         <div class="main-card glass-card">
@@ -847,19 +780,7 @@ onUnmounted(() => {
 .header-desc { margin: 0; opacity: .92; font-size: 13px; }
 .settings-btn { width: 36px; height: 36px; display: grid; place-items: center; border-radius: 10px; border: 1px solid rgba(255,255,255,.2); background: rgba(255,255,255,.12); color: #fff; cursor: pointer; }
 .method-card,.quality-card,.main-card,.result-card { padding: 18px 22px; }
-.quota-card { padding: 18px 22px; }
 .card-title { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; font-weight: 700; color: var(--text-1); font-size: 18px; }
-.quota-grid { display: grid; grid-template-columns: repeat(4, minmax(0,1fr)); gap: 8px; margin-bottom: 10px; }
-.quota-item { border: 1px solid var(--line-soft); border-radius: 12px; padding: 10px 12px; background: var(--song-item-bg); display: flex; flex-direction: column; gap: 4px; }
-.quota-label { font-size: 12px; color: var(--text-2); }
-.trend-wrap { margin-top: 8px; }
-.trend-title { font-size: 12px; color: var(--text-2); margin-bottom: 6px; }
-.trend-list { display: flex; flex-direction: column; gap: 6px; }
-.trend-row { display: grid; grid-template-columns: 44px 1fr 40px; gap: 8px; align-items: center; }
-.trend-day { font-size: 12px; color: var(--text-2); }
-.trend-bar { height: 8px; border-radius: 6px; background: rgba(15,111,255,.12); overflow: hidden; }
-.trend-bar i { display: block; height: 100%; background: linear-gradient(90deg, #0f6fff, #29a2ff); border-radius: 6px; }
-.trend-count { font-size: 12px; color: var(--text-1); text-align: right; }
 .method-options { display: flex; gap: 10px; flex-wrap: wrap; }
 .method-option { flex: 1; min-width: 120px; padding: 10px 12px; border-radius: 12px; border: 1px solid var(--line-soft); background: var(--tag-bg); color: var(--text-2); text-align: center; cursor: pointer; font-weight: 600; font-size: 18px; }
 .method-option input { display: none; }
@@ -920,11 +841,9 @@ onUnmounted(() => {
   .home-center { min-height: calc(100vh - 46px); }
   .home-header { padding: 18px; }
   .main-card,.method-card,.quality-card,.result-card { padding: 16px; }
-  .quota-card { padding: 16px; }
   .card-title { font-size: 18px; }
   .method-option { font-size: 16px; }
   .quality-tag { font-size: 13px; }
   .result-grid { grid-template-columns: 1fr; }
-  .quota-grid { grid-template-columns: repeat(2, minmax(0,1fr)); }
 }
 </style>

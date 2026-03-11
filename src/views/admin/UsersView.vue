@@ -1,6 +1,6 @@
 ﻿<script setup lang="ts">
-import { computed, h, onMounted, reactive, ref } from "vue";
-import { createDiscreteApi, type DataTableColumns, NButton, NInput, NPopconfirm, NSpace, NSwitch, NTag } from "naive-ui";
+import { computed, h, onMounted, reactive, ref, watch } from "vue";
+import { createDiscreteApi, type DataTableColumns, NButton, NInput, NSpace, NSwitch, NTag } from "naive-ui";
 import {
   createUser,
   listUserGroups,
@@ -35,7 +35,7 @@ const createForm = reactive({
   username: "",
   email: "",
   password: "",
-  role: "user" as "user" | "admin" | "super_admin",
+  role: "user" as "user" | "admin",
   group_id: 0,
   daily_limit: 0,
   concurrency_limit: 0,
@@ -56,21 +56,54 @@ const resetForm = reactive({
   password: "",
 });
 
-const roleOptions = computed(() => {
-  const base = [
-    { label: "普通用户", value: "user" },
-    { label: "管理员", value: "admin" },
-  ];
-  if (authStore.isSuperAdmin) {
-    base.push({ label: "超级管理员", value: "super_admin" });
-  }
-  return base;
-});
+const roleOptions = computed(() => [
+  { label: "普通用户", value: "user" },
+  { label: "管理员", value: "admin" },
+]);
 
 const groupOptions = computed(() => [
   { label: "不分组", value: 0 },
   ...groups.value.map((g) => ({ label: `${g.name}${g.is_default ? " (默认)" : ""}`, value: g.id })),
 ]);
+
+function isUnlimitedGroup(groupID?: number | null): boolean {
+  if (!groupID) return false;
+  const group = groups.value.find((g) => g.id === groupID);
+  return !!group?.unlimited_parse;
+}
+
+function getGroupByID(groupID?: number | null): UserGroupItem | undefined {
+  if (!groupID) return undefined;
+  return groups.value.find((item) => item.id === groupID);
+}
+
+function findDefaultGroupID(): number {
+  const group = groups.value.find((item) => item.is_default);
+  return group ? group.id : 0;
+}
+
+function applyCreateGroupInheritance(groupID?: number | null) {
+  const group = getGroupByID(groupID);
+  if (!group) return;
+  if (group.unlimited_parse) {
+    createForm.daily_limit = 0;
+    createForm.concurrency_limit = 0;
+    limitDraft.createDaily = "∞";
+    limitDraft.createConcurrency = "∞";
+    limitDraft.createDailyError = "";
+    limitDraft.createConcurrencyError = "";
+    return;
+  }
+  createForm.daily_limit = Math.max(Number(group.daily_limit || 0), 0);
+  createForm.concurrency_limit = Math.max(Number(group.concurrency_limit || 0), 0);
+  limitDraft.createDaily = String(createForm.daily_limit);
+  limitDraft.createConcurrency = String(createForm.concurrency_limit);
+  limitDraft.createDailyError = "";
+  limitDraft.createConcurrencyError = "";
+}
+
+const createGroupUnlimited = computed(() => isUnlimitedGroup(createForm.group_id));
+const editGroupUnlimited = computed(() => isUnlimitedGroup(editForm.group_id));
 
 const limitDraft = reactive({
   createDaily: "0",
@@ -92,6 +125,13 @@ function validateNonNegativeInteger(value: string, label: string): string {
 }
 
 function syncCreateDraftFromForm() {
+  if (createGroupUnlimited.value) {
+    limitDraft.createDaily = "∞";
+    limitDraft.createConcurrency = "∞";
+    limitDraft.createDailyError = "";
+    limitDraft.createConcurrencyError = "";
+    return;
+  }
   limitDraft.createDaily = String(createForm.daily_limit);
   limitDraft.createConcurrency = String(createForm.concurrency_limit);
   limitDraft.createDailyError = "";
@@ -105,7 +145,15 @@ function syncEditDraftFromForm() {
   limitDraft.editConcurrencyError = "";
 }
 
+function syncEditDraftAsUnlimited() {
+  limitDraft.editDaily = "∞";
+  limitDraft.editConcurrency = "∞";
+  limitDraft.editDailyError = "";
+  limitDraft.editConcurrencyError = "";
+}
+
 function onCreateDailyLimitInput(value: string) {
+  if (createGroupUnlimited.value) return;
   limitDraft.createDaily = value;
   const error = validateNonNegativeInteger(value, "每日次数");
   limitDraft.createDailyError = error;
@@ -114,6 +162,7 @@ function onCreateDailyLimitInput(value: string) {
 }
 
 function onCreateConcurrencyLimitInput(value: string) {
+  if (createGroupUnlimited.value) return;
   limitDraft.createConcurrency = value;
   const error = validateNonNegativeInteger(value, "并发上限");
   limitDraft.createConcurrencyError = error;
@@ -138,6 +187,10 @@ function onEditConcurrencyLimitInput(value: string) {
 }
 
 function onCreateDailyLimitBlur() {
+  if (createGroupUnlimited.value) {
+    syncCreateDraftFromForm();
+    return;
+  }
   if (limitDraft.createDailyError) {
     message.warning(limitDraft.createDailyError);
     return;
@@ -146,6 +199,10 @@ function onCreateDailyLimitBlur() {
 }
 
 function onCreateConcurrencyLimitBlur() {
+  if (createGroupUnlimited.value) {
+    syncCreateDraftFromForm();
+    return;
+  }
   if (limitDraft.createConcurrencyError) {
     message.warning(limitDraft.createConcurrencyError);
     return;
@@ -224,7 +281,7 @@ const columns: DataTableColumns<UserItem> = [
     key: "limits",
     width: 140,
     align: "center",
-    render: (row) => `${row.daily_limit || 0} / ${row.concurrency_limit || 0}`,
+    render: (row) => (row.group_unlimited ? "∞ / ∞" : `${row.daily_limit || 0} / ${row.concurrency_limit || 0}`),
   },
   {
     title: "最近登录",
@@ -241,7 +298,7 @@ const columns: DataTableColumns<UserItem> = [
     render: (row) =>
       h(NSwitch, {
         value: row.status === "active",
-        disabled: row.role === "super_admin" && !authStore.isSuperAdmin,
+        disabled: row.role === "super_admin",
         onUpdateValue: async (value: boolean) => {
           await onToggleStatus(row, value);
         },
@@ -250,33 +307,22 @@ const columns: DataTableColumns<UserItem> = [
   {
     title: "操作",
     key: "actions",
-    width: 300,
+    width: 230,
     align: "center",
     render: (row) =>
       h(NSpace, { size: 6, wrapItem: false, justify: "center" }, {
         default: () => [
           h(NButton, { tertiary: true, size: "small", type: "info", onClick: () => openEdit(row) }, { default: () => "编辑" }),
-          authStore.isSuperAdmin
+          authStore.isSuperAdmin && row.role !== "super_admin"
             ? h(
                 NButton,
                 {
                   tertiary: true,
                   size: "small",
-                  type: row.role === "super_admin" ? "warning" : "primary",
-                  disabled: row.role === "super_admin",
+                  type: "primary",
                   onClick: () => onChangeRole(row, row.role === "admin" ? "user" : "admin"),
                 },
                 { default: () => (row.role === "admin" ? "降为用户" : "设为管理员") },
-              )
-            : null,
-          authStore.isSuperAdmin && row.role !== "super_admin"
-            ? h(
-                NPopconfirm,
-                { onPositiveClick: () => onChangeRole(row, "super_admin") },
-                {
-                  default: () => "确认转移超级管理员身份到该用户？",
-                  trigger: () => h(NButton, { tertiary: true, size: "small", type: "error" }, { default: () => "设为超管" }),
-                },
               )
             : null,
           h(NButton, { tertiary: true, size: "small", onClick: () => openReset(row) }, { default: () => "重置密码" }),
@@ -307,6 +353,10 @@ async function loadUsers() {
 async function loadGroups() {
   try {
     groups.value = await listUserGroups();
+    if (!createForm.group_id) {
+      createForm.group_id = findDefaultGroupID();
+      applyCreateGroupInheritance(createForm.group_id);
+    }
   } catch {
     groups.value = [];
   }
@@ -322,7 +372,7 @@ async function onToggleStatus(row: UserItem, active: boolean) {
   }
 }
 
-async function onChangeRole(row: UserItem, role: "user" | "admin" | "super_admin") {
+async function onChangeRole(row: UserItem, role: "user" | "admin") {
   try {
     await updateUserRole(row.id, role);
     message.success("角色已更新");
@@ -333,6 +383,8 @@ async function onChangeRole(row: UserItem, role: "user" | "admin" | "super_admin
 }
 
 function openCreate() {
+  createForm.group_id = findDefaultGroupID();
+  applyCreateGroupInheritance(createForm.group_id);
   syncCreateDraftFromForm();
   showCreate.value = true;
 }
@@ -345,6 +397,9 @@ function openEdit(row: UserItem) {
   editForm.daily_limit = row.daily_limit || 0;
   editForm.concurrency_limit = row.concurrency_limit || 0;
   syncEditDraftFromForm();
+  if (isUnlimitedGroup(editForm.group_id)) {
+    syncEditDraftAsUnlimited();
+  }
   showEdit.value = true;
 }
 
@@ -359,7 +414,7 @@ async function onCreate() {
     message.warning("请填写完整信息，密码至少8位");
     return;
   }
-  if (limitDraft.createDailyError || limitDraft.createConcurrencyError) {
+  if (!createGroupUnlimited.value && (limitDraft.createDailyError || limitDraft.createConcurrencyError)) {
     message.warning("请先修正数字输入项");
     return;
   }
@@ -380,10 +435,11 @@ async function onCreate() {
     createForm.email = "";
     createForm.password = "";
     createForm.role = "user";
-    createForm.group_id = 0;
+    createForm.group_id = findDefaultGroupID();
     createForm.daily_limit = 0;
     createForm.concurrency_limit = 0;
     createForm.active = true;
+    applyCreateGroupInheritance(createForm.group_id);
     syncCreateDraftFromForm();
     await loadUsers();
   } catch (error) {
@@ -392,7 +448,7 @@ async function onCreate() {
 }
 
 async function onSaveEdit() {
-  if (limitDraft.editDailyError || limitDraft.editConcurrencyError) {
+  if (!editGroupUnlimited.value && (limitDraft.editDailyError || limitDraft.editConcurrencyError)) {
     message.warning("请先修正数字输入项");
     return;
   }
@@ -401,8 +457,8 @@ async function onSaveEdit() {
       username: editForm.username.trim(),
       email: editForm.email.trim(),
       group_id: editForm.group_id || 0,
-      daily_limit: Number(editForm.daily_limit) || 0,
-      concurrency_limit: Number(editForm.concurrency_limit) || 0,
+      daily_limit: editGroupUnlimited.value ? 0 : Number(editForm.daily_limit) || 0,
+      concurrency_limit: editGroupUnlimited.value ? 0 : Number(editForm.concurrency_limit) || 0,
     });
     message.success("保存成功");
     showEdit.value = false;
@@ -436,6 +492,35 @@ onMounted(async () => {
   await loadGroups();
   await loadUsers();
 });
+
+watch(
+  () => createForm.group_id,
+  (groupID, previousGroupID) => {
+    if (groupID === previousGroupID) return;
+    if (groupID) {
+      applyCreateGroupInheritance(groupID);
+      return;
+    }
+    if (isUnlimitedGroup(previousGroupID)) {
+      createForm.daily_limit = 0;
+      createForm.concurrency_limit = 0;
+      syncCreateDraftFromForm();
+    }
+  },
+);
+
+watch(
+  () => editForm.group_id,
+  (groupID, previousGroupID) => {
+    if (isUnlimitedGroup(groupID)) {
+      syncEditDraftAsUnlimited();
+      return;
+    }
+    if (isUnlimitedGroup(previousGroupID)) {
+      syncEditDraftFromForm();
+    }
+  },
+);
 </script>
 
 <template>
@@ -453,9 +538,9 @@ onMounted(async () => {
 
     <n-card class="filter-card">
       <n-space :size="10" wrap>
-        <n-input v-model:value="keyword" clearable placeholder="用户名/邮箱关键字" style="width: 220px" @keydown.enter="loadUsers" />
-        <n-select v-model:value="roleFilter" clearable placeholder="角色筛选" :options="[{label:'普通用户',value:'user'},{label:'管理员',value:'admin'},{label:'超级管理员',value:'super_admin'}]" style="width: 150px" />
-        <n-select v-model:value="statusFilter" clearable placeholder="状态筛选" :options="[{label:'启用',value:'active'},{label:'禁用',value:'disabled'}]" style="width: 140px" />
+        <n-input v-model:value="keyword" clearable placeholder="请输入用户名" style="width: 220px" @keydown.enter="loadUsers" />
+        <n-select v-model:value="roleFilter" clearable placeholder="请选择角色" :options="[{label:'普通用户',value:'user'},{label:'管理员',value:'admin'},{label:'超级管理员',value:'super_admin'}]" style="width: 150px" />
+        <n-select v-model:value="statusFilter" clearable placeholder="请选择状态" :options="[{label:'启用',value:'active'},{label:'禁用',value:'disabled'}]" style="width: 140px" />
         <n-button type="primary" @click="loadUsers">查询</n-button>
       </n-space>
     </n-card>
@@ -480,22 +565,25 @@ onMounted(async () => {
       <n-form label-placement="top">
         <n-grid :cols="24" :x-gap="12">
           <n-form-item-gi :span="12" label="用户名">
-            <n-input v-model:value="createForm.username" />
+            <n-input v-model:value="createForm.username" placeholder="请输入用户名（中文或英文开头）" />
+            <div class="field-tip">仅支持中文或英文开头，可包含数字、下划线和短横线，长度 2-32。</div>
           </n-form-item-gi>
           <n-form-item-gi :span="12" label="邮箱">
-            <n-input v-model:value="createForm.email" />
+            <n-input v-model:value="createForm.email" placeholder="请输入邮箱地址" />
           </n-form-item-gi>
           <n-form-item-gi :span="12" label="初始密码">
-            <n-input v-model:value="createForm.password" type="password" show-password-on="click" />
+            <n-input v-model:value="createForm.password" type="password" show-password-on="click" placeholder="请输入初始密码（至少 8 位）" />
           </n-form-item-gi>
           <n-form-item-gi :span="12" label="角色">
-            <n-select v-model:value="createForm.role" :options="roleOptions" />
+            <n-select v-model:value="createForm.role" :options="roleOptions" placeholder="请选择角色" />
           </n-form-item-gi>
           <n-form-item-gi :span="12" label="用户组">
-            <n-select v-model:value="createForm.group_id" :options="groupOptions" />
+            <n-select v-model:value="createForm.group_id" :options="groupOptions" placeholder="请选择用户组" />
           </n-form-item-gi>
           <n-form-item-gi :span="6" label="每日次数">
+            <n-input v-if="createGroupUnlimited" value="∞" disabled style="width: 100%" />
             <n-input
+              v-else
               :value="limitDraft.createDaily"
               inputmode="numeric"
               placeholder="请输入每日次数"
@@ -505,7 +593,9 @@ onMounted(async () => {
             />
           </n-form-item-gi>
           <n-form-item-gi :span="6" label="并发上限">
+            <n-input v-if="createGroupUnlimited" value="∞" disabled style="width: 100%" />
             <n-input
+              v-else
               :value="limitDraft.createConcurrency"
               inputmode="numeric"
               placeholder="请输入并发上限"
@@ -531,16 +621,19 @@ onMounted(async () => {
       <n-form label-placement="top">
         <n-grid :cols="24" :x-gap="12">
           <n-form-item-gi :span="12" label="用户名">
-            <n-input v-model:value="editForm.username" />
+            <n-input v-model:value="editForm.username" placeholder="请输入用户名（中文或英文开头）" />
+            <div class="field-tip">仅支持中文或英文开头，可包含数字、下划线和短横线，长度 2-32。</div>
           </n-form-item-gi>
           <n-form-item-gi :span="12" label="邮箱">
-            <n-input v-model:value="editForm.email" />
+            <n-input v-model:value="editForm.email" placeholder="请输入邮箱地址" />
           </n-form-item-gi>
           <n-form-item-gi :span="12" label="用户组">
-            <n-select v-model:value="editForm.group_id" :options="groupOptions" />
+            <n-select v-model:value="editForm.group_id" :options="groupOptions" placeholder="请选择用户组" />
           </n-form-item-gi>
           <n-form-item-gi :span="6" label="每日次数">
+            <n-input v-if="editGroupUnlimited" value="∞" disabled style="width: 100%" />
             <n-input
+              v-else
               :value="limitDraft.editDaily"
               inputmode="numeric"
               placeholder="请输入每日次数"
@@ -550,7 +643,9 @@ onMounted(async () => {
             />
           </n-form-item-gi>
           <n-form-item-gi :span="6" label="并发上限">
+            <n-input v-if="editGroupUnlimited" value="∞" disabled style="width: 100%" />
             <n-input
+              v-else
               :value="limitDraft.editConcurrency"
               inputmode="numeric"
               placeholder="请输入并发上限"
@@ -603,6 +698,13 @@ onMounted(async () => {
   border-radius: 16px;
   background: rgba(255, 255, 255, 0.9);
   border: 1px solid rgba(20, 41, 78, 0.08);
+}
+
+.field-tip {
+  margin-top: 6px;
+  color: var(--text-2);
+  font-size: 12px;
+  line-height: 1.5;
 }
 
 @media (max-width: 760px) {

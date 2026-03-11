@@ -22,10 +22,12 @@ type SiteSettings struct {
 
 type FeatureSettings struct {
 	AllowRegister       bool   `json:"allow_register"`
+	RegisterEmailVerify bool   `json:"register_email_verify"`
 	DefaultParseQuality string `json:"default_parse_quality"`
 	ParseRequireLogin   bool   `json:"parse_require_login"`
 	DefaultDailyLimit   int    `json:"default_daily_parse_limit"`
 	DefaultConcurrency  int    `json:"default_concurrency_limit"`
+	CookieAutoVerify    bool   `json:"cookie_auto_verify"`
 }
 
 type CaptchaSettings struct {
@@ -117,6 +119,11 @@ func (s *SettingService) Save(settings SystemSettings) error {
 	if err := validateCaptchaSettings(settings.Captcha); err != nil {
 		return err
 	}
+	if settings.Feature.CookieAutoVerify {
+		if strings.TrimSpace(settings.SMTP.Host) == "" || settings.SMTP.Port <= 0 || strings.TrimSpace(settings.SMTP.User) == "" {
+			return fmt.Errorf("开启 Cookie 自动校验前，请先完成 SMTP 配置")
+		}
+	}
 	if err := s.db.Where("key IN ?", []string{"captcha_login_enabled", "captcha_register_enabled"}).Delete(&model.Setting{}).Error; err != nil {
 		return err
 	}
@@ -132,10 +139,12 @@ func (s *SettingService) Save(settings SystemSettings) error {
 		{"site_icp_no", settings.Site.ICPNo, false},
 		{"site_police_no", settings.Site.PoliceNo, false},
 		{"allow_register", strconv.FormatBool(settings.Feature.AllowRegister), false},
+		{"register_email_verify", strconv.FormatBool(settings.Feature.RegisterEmailVerify), false},
 		{"default_parse_quality", normalizeQuality(settings.Feature.DefaultParseQuality, "standard"), false},
 		{"parse_require_login", strconv.FormatBool(settings.Feature.ParseRequireLogin), false},
 		{"default_daily_parse_limit", strconv.Itoa(nonNegative(settings.Feature.DefaultDailyLimit)), false},
 		{"default_concurrency_limit", strconv.Itoa(nonNegative(settings.Feature.DefaultConcurrency)), false},
+		{"cookie_auto_verify", strconv.FormatBool(settings.Feature.CookieAutoVerify), false},
 		{"captcha_enabled", strconv.FormatBool(settings.Captcha.Enabled), false},
 		{"captcha_provider", settings.Captcha.Provider, false},
 		{"captcha_geetest_captcha_id", settings.Captcha.GeetestCaptchaID, false},
@@ -178,10 +187,12 @@ func (s *SettingService) Load() (SystemSettings, error) {
 		},
 		Feature: FeatureSettings{
 			AllowRegister:       false,
+			RegisterEmailVerify: false,
 			DefaultParseQuality: "standard",
 			ParseRequireLogin:   true,
 			DefaultDailyLimit:   100,
 			DefaultConcurrency:  2,
+			CookieAutoVerify:    false,
 		},
 		Captcha: CaptchaSettings{
 			Enabled:             false,
@@ -222,6 +233,7 @@ func (s *SettingService) Load() (SystemSettings, error) {
 	settings.Site.ICPNo = s.mustGetString("site_icp_no", defaults.Site.ICPNo)
 	settings.Site.PoliceNo = s.mustGetString("site_police_no", defaults.Site.PoliceNo)
 	settings.Feature.AllowRegister = s.mustGetBool("allow_register", defaults.Feature.AllowRegister)
+	settings.Feature.RegisterEmailVerify = s.mustGetBool("register_email_verify", defaults.Feature.RegisterEmailVerify)
 	settings.Feature.DefaultParseQuality = normalizeQuality(
 		s.mustGetString("default_parse_quality", defaults.Feature.DefaultParseQuality),
 		defaults.Feature.DefaultParseQuality,
@@ -229,6 +241,7 @@ func (s *SettingService) Load() (SystemSettings, error) {
 	settings.Feature.ParseRequireLogin = s.mustGetBool("parse_require_login", defaults.Feature.ParseRequireLogin)
 	settings.Feature.DefaultDailyLimit = s.mustGetInt("default_daily_parse_limit", defaults.Feature.DefaultDailyLimit)
 	settings.Feature.DefaultConcurrency = s.mustGetInt("default_concurrency_limit", defaults.Feature.DefaultConcurrency)
+	settings.Feature.CookieAutoVerify = s.mustGetBool("cookie_auto_verify", defaults.Feature.CookieAutoVerify)
 	settings.Captcha.Enabled = s.mustGetBool("captcha_enabled", defaults.Captcha.Enabled)
 	settings.Captcha.Provider = normalizeCaptchaProvider(s.mustGetString("captcha_provider", defaults.Captcha.Provider))
 	settings.Captcha.GeetestCaptchaID = s.mustGetString("captcha_geetest_captcha_id", defaults.Captcha.GeetestCaptchaID)
@@ -258,6 +271,10 @@ func (s *SettingService) Load() (SystemSettings, error) {
 
 func (s *SettingService) CanRegister() bool {
 	return s.mustGetBool("allow_register", false)
+}
+
+func (s *SettingService) RegisterEmailVerifyEnabled() bool {
+	return s.mustGetBool("register_email_verify", false)
 }
 
 func (s *SettingService) ParseRequireLogin() bool {
@@ -351,11 +368,11 @@ func validateCaptchaSettings(cfg CaptchaSettings) error {
 	switch normalizeCaptchaProvider(cfg.Provider) {
 	case "cloudflare":
 		if strings.TrimSpace(cfg.CloudflareSiteKey) == "" || strings.TrimSpace(cfg.CloudflareSecretKey) == "" {
-			return fmt.Errorf("cloudflare captcha site key and secret key are required when enabled")
+			return fmt.Errorf("启用 Cloudflare 验证码时，Site Key 与 Secret Key 不能为空")
 		}
 	default:
 		if strings.TrimSpace(cfg.GeetestCaptchaID) == "" || strings.TrimSpace(cfg.GeetestCaptchaKey) == "" {
-			return fmt.Errorf("geetest captcha_id and key are required when enabled")
+			return fmt.Errorf("启用极验验证码时，Captcha ID 与 Private Key 不能为空")
 		}
 	}
 	return nil

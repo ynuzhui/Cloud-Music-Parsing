@@ -4,31 +4,20 @@ import (
 	"net/mail"
 	"regexp"
 	"strings"
-	"unicode"
 )
 
-var englishUsernamePattern = regexp.MustCompile(`^[A-Za-z]{4,}$`)
+var usernamePattern = regexp.MustCompile(`^[A-Za-z\p{Han}][A-Za-z0-9_\-\p{Han}]{1,31}$`)
 
-// IsValidUsername accepts either:
-// 1) at least 4 English letters; or
-// 2) at least 2 Chinese (Han) characters.
+// IsValidUsername requires username:
+// 1) starts with Chinese or English letter;
+// 2) contains only Chinese/English/numbers/_/-;
+// 3) total length 2-32.
 func IsValidUsername(raw string) bool {
 	name := strings.TrimSpace(raw)
 	if name == "" {
 		return false
 	}
-	if englishUsernamePattern.MatchString(name) {
-		return true
-	}
-
-	count := 0
-	for _, r := range name {
-		if !unicode.Is(unicode.Han, r) {
-			return false
-		}
-		count++
-	}
-	return count >= 2
+	return usernamePattern.MatchString(name)
 }
 
 func IsValidEmail(raw string) bool {

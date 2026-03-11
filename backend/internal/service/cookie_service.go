@@ -38,7 +38,7 @@ func (s *ParseService) ExtractMusicU(raw string) string {
 func (s *ParseService) VerifyNeteaseCookie(ctx context.Context, rawCookie string) (*CookieVerifyResult, error) {
 	musicU := extractMusicUFromRaw(rawCookie)
 	if musicU == "" {
-		return nil, errors.New("cookie does not contain MUSIC_U")
+		return nil, errors.New("Cookie 未包含 MUSIC_U")
 	}
 
 	result := &CookieVerifyResult{
@@ -138,7 +138,7 @@ func (s *ParseService) callNeteaseAPI(ctx context.Context, method, endpoint stri
 		return err
 	}
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("netease upstream status: %d", resp.StatusCode)
+		return fmt.Errorf("网易上游接口状态异常：%d", resp.StatusCode)
 	}
 	if err := json.Unmarshal(raw, out); err != nil {
 		return err

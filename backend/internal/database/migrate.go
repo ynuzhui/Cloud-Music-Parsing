@@ -10,6 +10,7 @@ func AutoMigrate(db *gorm.DB) error {
 	return db.AutoMigrate(
 		&model.User{},
 		&model.UserGroup{},
+		&model.EmailVerificationCode{},
 		&model.Setting{},
 		&model.Cookie{},
 		&model.ParseRecord{},

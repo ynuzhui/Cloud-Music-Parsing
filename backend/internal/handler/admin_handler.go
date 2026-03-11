@@ -2,10 +2,7 @@ package handler
 
 import (
 	"context"
-	"crypto/tls"
-	"fmt"
 	"net/http"
-	"net/smtp"
 	"strconv"
 	"strings"
 	"time"
@@ -26,6 +23,7 @@ type AdminHandler struct {
 	settingService *service.SettingService
 	statsService   *service.StatsService
 	parseService   *service.ParseService
+	mailService    *service.MailService
 }
 
 func NewAdminHandler(
@@ -34,6 +32,7 @@ func NewAdminHandler(
 	settingSvc *service.SettingService,
 	statsSvc *service.StatsService,
 	parseSvc *service.ParseService,
+	mailSvc *service.MailService,
 ) *AdminHandler {
 	return &AdminHandler{
 		db:             db,
@@ -41,6 +40,7 @@ func NewAdminHandler(
 		settingService: settingSvc,
 		statsService:   statsSvc,
 		parseService:   parseSvc,
+		mailService:    mailSvc,
 	}
 }
 
@@ -65,14 +65,14 @@ func (h *AdminHandler) GetSettings(c *gin.Context) {
 func (h *AdminHandler) SaveSettings(c *gin.Context) {
 	var req service.SystemSettings
 	if err := c.ShouldBindJSON(&req); err != nil {
-		util.Err(c, http.StatusBadRequest, "invalid request body")
+		util.Err(c, http.StatusBadRequest, "请求参数格式错误")
 		return
 	}
 	if req.Redis.Enabled {
 		redisCache := cache.NewRedisCache(req.Redis.Addr(), req.Redis.Pass, req.Redis.DB)
 		if err := redisCache.Ping(c.Request.Context()); err != nil {
 			_ = redisCache.Close()
-			util.Err(c, http.StatusBadRequest, "redis connection failed: "+err.Error())
+			util.Err(c, http.StatusBadRequest, "Redis 连接失败: "+err.Error())
 			return
 		}
 		_ = redisCache.Close()
@@ -94,7 +94,7 @@ func (h *AdminHandler) AddCookie(c *gin.Context) {
 		Active   *bool  `json:"active"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		util.Err(c, http.StatusBadRequest, "invalid request body")
+		util.Err(c, http.StatusBadRequest, "请求参数格式错误")
 		return
 	}
 
@@ -102,7 +102,7 @@ func (h *AdminHandler) AddCookie(c *gin.Context) {
 	req.Label = strings.TrimSpace(req.Label)
 	req.Value = strings.TrimSpace(req.Value)
 	if req.Label == "" || req.Value == "" {
-		util.Err(c, http.StatusBadRequest, "label and value are required")
+		util.Err(c, http.StatusBadRequest, "标签和 Cookie 内容不能为空")
 		return
 	}
 
@@ -110,7 +110,7 @@ func (h *AdminHandler) AddCookie(c *gin.Context) {
 	if req.Provider == "netease" {
 		musicU := h.parseService.ExtractMusicU(req.Value)
 		if musicU == "" {
-			util.Err(c, http.StatusBadRequest, "cookie must contain MUSIC_U")
+			util.Err(c, http.StatusBadRequest, "Cookie 必须包含 MUSIC_U")
 			return
 		}
 		storeValue = "MUSIC_U=" + musicU
@@ -118,7 +118,7 @@ func (h *AdminHandler) AddCookie(c *gin.Context) {
 
 	enc, err := h.box.Encrypt(storeValue)
 	if err != nil {
-		util.Err(c, http.StatusInternalServerError, "cookie encryption failed")
+		util.Err(c, http.StatusInternalServerError, "Cookie 加密失败")
 		return
 	}
 
@@ -195,13 +195,13 @@ func (h *AdminHandler) ListCookies(c *gin.Context) {
 func (h *AdminHandler) UpdateCookie(c *gin.Context) {
 	id, err := strconv.Atoi(c.Param("id"))
 	if err != nil {
-		util.Err(c, http.StatusBadRequest, "invalid cookie id")
+		util.Err(c, http.StatusBadRequest, "Cookie ID 无效")
 		return
 	}
 
 	var row model.Cookie
 	if err := h.db.First(&row, id).Error; err != nil {
-		util.Err(c, http.StatusNotFound, "cookie not found")
+		util.Err(c, http.StatusNotFound, "Cookie 不存在")
 		return
 	}
 
@@ -211,7 +211,7 @@ func (h *AdminHandler) UpdateCookie(c *gin.Context) {
 		Active *bool   `json:"active"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		util.Err(c, http.StatusBadRequest, "invalid request body")
+		util.Err(c, http.StatusBadRequest, "请求参数格式错误")
 		return
 	}
 
@@ -219,7 +219,7 @@ func (h *AdminHandler) UpdateCookie(c *gin.Context) {
 	if req.Label != nil {
 		label := strings.TrimSpace(*req.Label)
 		if label == "" {
-			util.Err(c, http.StatusBadRequest, "label cannot be empty")
+			util.Err(c, http.StatusBadRequest, "标签不能为空")
 			return
 		}
 		row.Label = label
@@ -233,14 +233,14 @@ func (h *AdminHandler) UpdateCookie(c *gin.Context) {
 		if row.Provider == "netease" {
 			musicU := h.parseService.ExtractMusicU(storeValue)
 			if musicU == "" {
-				util.Err(c, http.StatusBadRequest, "cookie must contain MUSIC_U")
+				util.Err(c, http.StatusBadRequest, "Cookie 必须包含 MUSIC_U")
 				return
 			}
 			storeValue = "MUSIC_U=" + musicU
 		}
 		enc, encErr := h.box.Encrypt(storeValue)
 		if encErr != nil {
-			util.Err(c, http.StatusInternalServerError, "cookie encryption failed")
+			util.Err(c, http.StatusInternalServerError, "Cookie 加密失败")
 			return
 		}
 		row.ValueEncrypted = enc
@@ -262,7 +262,7 @@ func (h *AdminHandler) UpdateCookie(c *gin.Context) {
 func (h *AdminHandler) DeleteCookie(c *gin.Context) {
 	id, err := strconv.Atoi(c.Param("id"))
 	if err != nil {
-		util.Err(c, http.StatusBadRequest, "invalid cookie id")
+		util.Err(c, http.StatusBadRequest, "Cookie ID 无效")
 		return
 	}
 	if err := h.db.Delete(&model.Cookie{}, id).Error; err != nil {
@@ -275,17 +275,17 @@ func (h *AdminHandler) DeleteCookie(c *gin.Context) {
 func (h *AdminHandler) VerifyCookie(c *gin.Context) {
 	id, err := strconv.Atoi(c.Param("id"))
 	if err != nil {
-		util.Err(c, http.StatusBadRequest, "invalid cookie id")
+		util.Err(c, http.StatusBadRequest, "Cookie ID 无效")
 		return
 	}
 
 	var row model.Cookie
 	if err := h.db.First(&row, id).Error; err != nil {
-		util.Err(c, http.StatusNotFound, "cookie not found")
+		util.Err(c, http.StatusNotFound, "Cookie 不存在")
 		return
 	}
 	if row.Provider != "netease" {
-		util.Err(c, http.StatusBadRequest, "only netease cookie verification is supported")
+		util.Err(c, http.StatusBadRequest, "仅支持网易 Cookie 校验")
 		return
 	}
 
@@ -355,72 +355,16 @@ func (h *AdminHandler) SmtpTest(c *gin.Context) {
 		To string `json:"to"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil || strings.TrimSpace(req.To) == "" {
-		util.Err(c, http.StatusBadRequest, "recipient email is required")
+		util.Err(c, http.StatusBadRequest, "收件人邮箱不能为空")
 		return
 	}
-
-	settings, err := h.settingService.Load()
-	if err != nil {
-		util.Err(c, http.StatusInternalServerError, err.Error())
+	if h.mailService == nil {
+		util.Err(c, http.StatusInternalServerError, "邮件服务未初始化")
 		return
 	}
-	smtpCfg := settings.SMTP
-	if strings.TrimSpace(smtpCfg.Host) == "" {
-		util.Err(c, http.StatusBadRequest, "smtp host is required")
+	if err := h.mailService.SendText(strings.TrimSpace(req.To), "【云音解析】SMTP 测试", "这是一封来自云音解析的 SMTP 测试邮件。"); err != nil {
+		util.Err(c, http.StatusBadRequest, err.Error())
 		return
-	}
-
-	addr := fmt.Sprintf("%s:%d", smtpCfg.Host, smtpCfg.Port)
-	subject := "Cloud Music Parsing SMTP test"
-	body := "This is a test email from Cloud Music Parsing."
-	msg := fmt.Sprintf("From: %s\r\nTo: %s\r\nSubject: %s\r\nContent-Type: text/plain; charset=UTF-8\r\n\r\n%s",
-		smtpCfg.User, req.To, subject, body)
-
-	var auth smtp.Auth
-	if smtpCfg.User != "" {
-		auth = smtp.PlainAuth("", smtpCfg.User, smtpCfg.Pass, smtpCfg.Host)
-	}
-
-	if smtpCfg.SSL {
-		tlsConfig := &tls.Config{ServerName: smtpCfg.Host}
-		conn, err := tls.Dial("tcp", addr, tlsConfig)
-		if err != nil {
-			util.Err(c, http.StatusBadRequest, "smtp tls connect failed: "+err.Error())
-			return
-		}
-		client, err := smtp.NewClient(conn, smtpCfg.Host)
-		if err != nil {
-			util.Err(c, http.StatusBadRequest, "smtp client create failed: "+err.Error())
-			return
-		}
-		defer client.Close()
-		if auth != nil {
-			if err := client.Auth(auth); err != nil {
-				util.Err(c, http.StatusBadRequest, "smtp auth failed: "+err.Error())
-				return
-			}
-		}
-		if err := client.Mail(smtpCfg.User); err != nil {
-			util.Err(c, http.StatusBadRequest, "smtp MAIL FROM failed: "+err.Error())
-			return
-		}
-		if err := client.Rcpt(req.To); err != nil {
-			util.Err(c, http.StatusBadRequest, "smtp RCPT TO failed: "+err.Error())
-			return
-		}
-		w, err := client.Data()
-		if err != nil {
-			util.Err(c, http.StatusBadRequest, "smtp DATA failed: "+err.Error())
-			return
-		}
-		_, _ = w.Write([]byte(msg))
-		_ = w.Close()
-		_ = client.Quit()
-	} else {
-		if err := smtp.SendMail(addr, auth, smtpCfg.User, []string{req.To}, []byte(msg)); err != nil {
-			util.Err(c, http.StatusBadRequest, "smtp send failed: "+err.Error())
-			return
-		}
 	}
 
 	util.OK(c, gin.H{"sent": true})

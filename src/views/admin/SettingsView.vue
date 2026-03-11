@@ -25,10 +25,12 @@ const siteForm = reactive({
 
 const featureForm = reactive({
   allow_register: false,
-  default_parse_quality: "standard" as "standard" | "exhigh" | "lossless" | "hires" | "jymaster",
+  register_email_verify: false,
+  default_parse_quality: "standard" as "standard" | "exhigh" | "lossless" | "hires" | "sky" | "jyeffect" | "jymaster",
   parse_require_login: true,
   default_daily_parse_limit: 100,
   default_concurrency_limit: 2,
+  cookie_auto_verify: false,
 });
 
 const numericDraft = reactive({
@@ -52,6 +54,8 @@ const parseQualityOptions = [
   { label: "极高", value: "exhigh" },
   { label: "无损", value: "lossless" },
   { label: "Hi-Res", value: "hires" },
+  { label: "沉浸环绕声", value: "sky" },
+  { label: "高清环绕声", value: "jyeffect" },
   { label: "超清母带", value: "jymaster" },
 ];
 
@@ -155,6 +159,16 @@ async function onSave() {
     message.warning("请先修正数字输入项后再保存");
     return;
   }
+  if (featureForm.cookie_auto_verify) {
+    const smtp = fullSettings.value.smtp;
+    const hostReady = !!smtp?.host?.trim();
+    const userReady = !!smtp?.user?.trim();
+    const portReady = Number(smtp?.port || 0) > 0;
+    if (!hostReady || !userReady || !portReady) {
+      message.warning("开启 Cookie 自动校验前，请先在 SMTP 配置中完成发件服务设置");
+      return;
+    }
+  }
   saving.value = true;
   try {
     fullSettings.value.site = { ...currentPayload.value.site };
@@ -232,8 +246,15 @@ onBeforeUnmount(() => {
             <n-form-item label="是否允许用户注册">
               <n-switch v-model:value="featureForm.allow_register" />
             </n-form-item>
+            <n-form-item label="注册时启用邮箱验证码">
+              <n-switch v-model:value="featureForm.register_email_verify" />
+            </n-form-item>
             <n-form-item label="是否必须登录后解析">
               <n-switch v-model:value="featureForm.parse_require_login" />
+            </n-form-item>
+            <n-form-item label="Cookie 自动校验（北京时间 00/06/12/18 点）">
+              <n-switch v-model:value="featureForm.cookie_auto_verify" />
+              <div class="field-tip">开启前请先在 SMTP 配置中完成发件服务设置，校验失败将邮件通知超级管理员。</div>
             </n-form-item>
             <n-form-item label="默认解析音质">
               <n-select
@@ -340,6 +361,13 @@ onBeforeUnmount(() => {
   border-radius: 16px;
   background: rgba(255, 255, 255, 0.9);
   border: 1px solid rgba(20, 41, 78, 0.08);
+}
+
+.field-tip {
+  margin-top: 6px;
+  color: var(--text-2);
+  font-size: 12px;
+  line-height: 1.55;
 }
 
 .settings-stack {

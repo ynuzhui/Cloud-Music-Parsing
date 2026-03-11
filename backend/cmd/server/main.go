@@ -48,6 +48,7 @@ func main() {
 	exitForExternalRestart := shouldExitForExternalRestart()
 
 	for {
+		runtimeCtx, runtimeCancel := context.WithCancel(context.Background())
 		cfg, err := config.Load(envFilePath)
 		if err != nil {
 			log.Fatalf("load config failed: %v", err)
@@ -77,13 +78,13 @@ func main() {
 		}
 
 		if cfg.InstallDone {
-			if err := mountInstalledRoutes(router, cfg, limiter, state); err != nil {
+			if err := mountInstalledRoutes(runtimeCtx, router, cfg, limiter, state); err != nil {
 				log.Fatalf("mount installed routes failed: %v", err)
 			}
 		} else {
 			router.Any("/api/auth/*path", notInstalled)
 			router.Any("/api/music/*path", notInstalled)
-			router.Any("/api/admin/*path", notInstalled)
+			router.Any("/api/dashboard/*path", notInstalled)
 		}
 		mountFrontendRoutes(router, distPath, state)
 
@@ -102,6 +103,7 @@ func main() {
 		// Block until restart signal
 		<-restartCh
 		log.Println("received restart signal, shutting down...")
+		runtimeCancel()
 
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		_ = srv.Shutdown(ctx)
@@ -213,7 +215,7 @@ func dirExists(p string) bool {
 	return err == nil && info.IsDir()
 }
 
-func mountInstalledRoutes(router *gin.Engine, cfg config.Config, limiter *middleware.MemoryRateLimiter, state *middleware.InstallState) error {
+func mountInstalledRoutes(runtimeCtx context.Context, router *gin.Engine, cfg config.Config, limiter *middleware.MemoryRateLimiter, state *middleware.InstallState) error {
 	db, err := database.Open(cfg)
 	if err != nil {
 		return err
@@ -221,7 +223,7 @@ func mountInstalledRoutes(router *gin.Engine, cfg config.Config, limiter *middle
 	if err := database.AutoMigrate(db); err != nil {
 		return err
 	}
-	if err := ensureSingleSuperAdmin(db); err != nil {
+	if err := ensureFixedSuperAdmin(db); err != nil {
 		return err
 	}
 	if err := ensureBuiltinUserGroups(db); err != nil {
@@ -238,15 +240,19 @@ func mountInstalledRoutes(router *gin.Engine, cfg config.Config, limiter *middle
 	statsSvc := service.NewStatsService(db)
 	quotaSvc := service.NewQuotaService(db, settingSvc)
 	captchaSvc := service.NewCaptchaService(settingSvc)
-	_ = parseSvc.RefreshCacheBackend(context.Background())
+	mailSvc := service.NewMailService(settingSvc)
+	emailCodeSvc := service.NewEmailCodeService(db, mailSvc)
+	cookieAutoVerifyJob := service.NewCookieAutoVerifyJob(db, box, parseSvc, settingSvc, mailSvc)
+	_ = parseSvc.RefreshCacheBackend(runtimeCtx)
+	go cookieAutoVerifyJob.Run(runtimeCtx)
 	publicHandler := handler.NewPublicHandler(settingSvc)
 
 	router.Use(middleware.AuditLog(db))
 	router.GET("/api/site", middleware.RequireInstalled(state), publicHandler.Site)
 
-	authHandler := handler.NewAuthHandler(db, jwtMgr, settingSvc, captchaSvc)
+	authHandler := handler.NewAuthHandler(db, jwtMgr, settingSvc, captchaSvc, emailCodeSvc)
 	parseHandler := handler.NewParseHandler(parseSvc, quotaSvc)
-	adminHandler := handler.NewAdminHandler(db, box, settingSvc, statsSvc, parseSvc)
+	adminHandler := handler.NewAdminHandler(db, box, settingSvc, statsSvc, parseSvc, mailSvc)
 	userAdminHandler := handler.NewUserAdminHandler(db)
 	userHandler := handler.NewUserHandler(db, quotaSvc)
 
@@ -254,6 +260,7 @@ func mountInstalledRoutes(router *gin.Engine, cfg config.Config, limiter *middle
 	authRoutes.Use(middleware.RequireInstalled(state))
 	{
 		authRoutes.POST("/login", limiter.Middleware(), authHandler.Login)
+		authRoutes.POST("/register/email-code", limiter.Middleware(), authHandler.SendRegisterEmailCode)
 		authRoutes.POST("/register", limiter.Middleware(), authHandler.Register)
 		authRoutes.GET("/me", middleware.JWTAuth(jwtMgr, db), userHandler.Me)
 	}
@@ -270,7 +277,7 @@ func mountInstalledRoutes(router *gin.Engine, cfg config.Config, limiter *middle
 		musicRoutes.POST("/cover/download", limiter.Middleware(), parseHandler.DownloadCover)
 	}
 
-	adminRoutes := router.Group("/api/admin")
+	adminRoutes := router.Group("/api/dashboard")
 	adminRoutes.Use(middleware.RequireInstalled(state), middleware.JWTAuth(jwtMgr, db), middleware.AdminOnly())
 	{
 		adminRoutes.GET("/stats", adminHandler.Stats)
@@ -311,7 +318,7 @@ func mountInstalledRoutes(router *gin.Engine, cfg config.Config, limiter *middle
 func notInstalled(c *gin.Context) {
 	c.JSON(http.StatusPreconditionRequired, gin.H{
 		"code": http.StatusPreconditionRequired,
-		"msg":  "system not installed, visit /install first",
+		"msg":  "系统尚未安装，请先完成安装流程",
 	})
 }
 
@@ -333,7 +340,7 @@ func mountFrontendRoutes(router *gin.Engine, distDir string, state *middleware.I
 	router.NoRoute(func(c *gin.Context) {
 		requestPath := c.Request.URL.Path
 		if strings.HasPrefix(requestPath, "/api/") {
-			util.Err(c, http.StatusNotFound, "endpoint not found")
+			util.Err(c, http.StatusNotFound, "接口不存在")
 			return
 		}
 
@@ -346,7 +353,7 @@ func mountFrontendRoutes(router *gin.Engine, distDir string, state *middleware.I
 				return
 			}
 			if strings.Contains(filepath.Base(cleaned), ".") {
-				util.Err(c, http.StatusNotFound, "asset not found")
+				util.Err(c, http.StatusNotFound, "静态资源不存在")
 				return
 			}
 		}
@@ -367,7 +374,7 @@ func mountFrontendRoutesFromFS(router *gin.Engine, frontendFS fs.FS, state *midd
 	router.NoRoute(func(c *gin.Context) {
 		requestPath := c.Request.URL.Path
 		if strings.HasPrefix(requestPath, "/api/") {
-			util.Err(c, http.StatusNotFound, "endpoint not found")
+			util.Err(c, http.StatusNotFound, "接口不存在")
 			return
 		}
 
@@ -379,7 +386,7 @@ func mountFrontendRoutesFromFS(router *gin.Engine, frontendFS fs.FS, state *midd
 				return
 			}
 			if strings.Contains(path.Base(cleaned), ".") {
-				util.Err(c, http.StatusNotFound, "asset not found")
+				util.Err(c, http.StatusNotFound, "静态资源不存在")
 				return
 			}
 		}
@@ -426,27 +433,30 @@ func detectContentType(filePath string, content []byte) string {
 	return http.DetectContentType(content)
 }
 
-func ensureSingleSuperAdmin(db *gorm.DB) error {
-	var supers []model.User
-	if err := db.Where("role = ?", "super_admin").Order("id asc").Find(&supers).Error; err != nil {
+func ensureFixedSuperAdmin(db *gorm.DB) error {
+	var root model.User
+	if err := db.First(&root, 1).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return errors.New("未找到 ID=1 用户，无法固定超级管理员")
+		}
 		return err
 	}
-	if len(supers) == 0 {
-		var firstAdmin model.User
-		if err := db.Where("role = ?", "admin").Order("id asc").First(&firstAdmin).Error; err != nil {
-			if errors.Is(err, gorm.ErrRecordNotFound) {
-				return nil
-			}
+
+	updates := map[string]any{}
+	if root.Role != "super_admin" {
+		updates["role"] = "super_admin"
+	}
+	if strings.ToLower(strings.TrimSpace(root.Status)) != "active" {
+		updates["status"] = "active"
+	}
+	if len(updates) > 0 {
+		if err := db.Model(&model.User{}).Where("id = ?", 1).Updates(updates).Error; err != nil {
 			return err
 		}
-		return db.Model(&model.User{}).Where("id = ?", firstAdmin.ID).Update("role", "super_admin").Error
 	}
-	if len(supers) == 1 {
-		return nil
-	}
-	keeperID := supers[0].ID
+
 	return db.Model(&model.User{}).
-		Where("role = ? AND id <> ?", "super_admin", keeperID).
+		Where("role = ? AND id <> ?", "super_admin", 1).
 		Updates(map[string]any{
 			"role":          "admin",
 			"token_version": gorm.Expr("token_version + 1"),
@@ -533,7 +543,7 @@ func ensureBuiltinUserGroups(db *gorm.DB) error {
 		}
 
 		var superAdmin model.User
-		if err := tx.Where("role = ?", "super_admin").Order("id asc").First(&superAdmin).Error; err != nil {
+		if err := tx.First(&superAdmin, 1).Error; err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
 				return nil
 			}

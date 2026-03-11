@@ -1,50 +1,93 @@
 ﻿<script setup lang="ts">
-import { onMounted, reactive, ref } from "vue";
+import { computed, onBeforeUnmount, onMounted, reactive, ref } from "vue";
 import { useRouter } from "vue-router";
 import { createDiscreteApi } from "naive-ui";
-import { register } from "@/api/modules/auth";
+import { register, sendRegisterEmailCode } from "@/api/modules/auth";
 import { getPublicSiteSettings, type PublicSiteSettings } from "@/api/modules/site";
 import { resolveCaptchaPayload } from "@/utils/captcha";
 
 const router = useRouter();
 const { message } = createDiscreteApi(["message"]);
-const englishUsernamePattern = /^[A-Za-z]{4,}$/;
+const usernamePattern = /^[A-Za-z\u4E00-\u9FFF][A-Za-z0-9_\-\u4E00-\u9FFF]{1,31}$/;
 
 const loading = ref(false);
+const sendingEmailCode = ref(false);
+const registerEmailVerify = ref(false);
+const emailCodeCountdown = ref(0);
 const captchaConfig = ref<PublicSiteSettings["captcha"]>();
+let countdownTimer: number | null = null;
+
 const form = reactive({
   username: "",
   email: "",
-  password: ""
+  password: "",
+  confirm_password: "",
+  email_code: "",
 });
+
+const sendCodeButtonText = computed(() => (emailCodeCountdown.value > 0 ? `${emailCodeCountdown.value}s 后重试` : "发送验证码"));
 
 async function refreshCaptchaConfig(force = false) {
   try {
     const site = await getPublicSiteSettings(force);
     captchaConfig.value = site.captcha;
+    registerEmailVerify.value = !!site.register_email_verify;
   } catch {
     captchaConfig.value = undefined;
+    registerEmailVerify.value = false;
   }
 }
 
 function isValidUsername(raw: string) {
-  const value = raw.trim();
-  if (!value) return false;
-  if (englishUsernamePattern.test(value)) return true;
-  const chars = [...value];
-  return chars.length >= 2 && chars.every((ch) => /^[\u4E00-\u9FFF]$/.test(ch));
+  return usernamePattern.test(raw.trim());
 }
 
 function isValidEmail(raw: string) {
-  const value = raw.trim();
-  return value.length > 3 && value.includes("@");
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(raw.trim());
+}
+
+function startEmailCodeCountdown() {
+  emailCodeCountdown.value = 60;
+  if (countdownTimer) {
+    window.clearInterval(countdownTimer);
+  }
+  countdownTimer = window.setInterval(() => {
+    if (emailCodeCountdown.value <= 1) {
+      emailCodeCountdown.value = 0;
+      if (countdownTimer) {
+        window.clearInterval(countdownTimer);
+        countdownTimer = null;
+      }
+      return;
+    }
+    emailCodeCountdown.value -= 1;
+  }, 1000);
+}
+
+async function onSendEmailCode() {
+  if (!registerEmailVerify.value || sendingEmailCode.value || emailCodeCountdown.value > 0) return;
+  const email = form.email.trim();
+  if (!isValidEmail(email)) {
+    message.warning("请先输入有效邮箱地址");
+    return;
+  }
+  sendingEmailCode.value = true;
+  try {
+    await sendRegisterEmailCode(email);
+    message.success("验证码已发送，请查收邮箱");
+    startEmailCodeCountdown();
+  } catch (error) {
+    message.error((error as Error).message);
+  } finally {
+    sendingEmailCode.value = false;
+  }
 }
 
 async function onRegister() {
   const username = form.username.trim();
   const email = form.email.trim();
   if (!isValidUsername(username)) {
-    message.warning("用户名需至少4个英文字符，或至少2个中文字符");
+    message.warning("用户名需以中文或英文开头，长度 2-32，可包含数字、下划线和短横线");
     return;
   }
   if (!isValidEmail(email)) {
@@ -53,6 +96,18 @@ async function onRegister() {
   }
   if (form.password.length < 8) {
     message.warning("密码至少 8 位");
+    return;
+  }
+  if (!form.confirm_password) {
+    message.warning("请再次输入密码");
+    return;
+  }
+  if (form.password !== form.confirm_password) {
+    message.warning("两次输入的密码不一致");
+    return;
+  }
+  if (registerEmailVerify.value && !form.email_code.trim()) {
+    message.warning("请输入邮箱验证码");
     return;
   }
 
@@ -72,7 +127,9 @@ async function onRegister() {
       username,
       email,
       password: form.password,
-      captcha: captchaPayload
+      confirm_password: form.confirm_password,
+      email_code: registerEmailVerify.value ? form.email_code.trim() : undefined,
+      captcha: captchaPayload,
     });
     message.success("注册成功，请登录");
     router.replace("/login");
@@ -90,6 +147,13 @@ function goLogin() {
 onMounted(async () => {
   await refreshCaptchaConfig(true);
 });
+
+onBeforeUnmount(() => {
+  if (countdownTimer) {
+    window.clearInterval(countdownTimer);
+    countdownTimer = null;
+  }
+});
 </script>
 
 <template>
@@ -101,25 +165,42 @@ onMounted(async () => {
       <div class="left-banner">
         <p class="badge">MUSIC PARSER</p>
         <h1>创建新账号</h1>
-        <p class="desc">注册后即可使用系统功能。若注册被禁用，请联系管理员在后台开启。</p>
+        <p class="desc">注册后即可使用解析与下载等功能，并拥有个人额度与记录。若当前关闭注册，请联系管理员在站点配置中开启。</p>
       </div>
       <div class="right-form">
         <h2>用户注册</h2>
         <n-form :show-feedback="false" label-placement="top">
           <n-form-item label="用户名">
-            <n-input v-model:value="form.username" placeholder="至少4个英文字符，或至少2个中文字符" size="large" />
+            <n-input v-model:value="form.username" placeholder="请输入用户名（中文或英文开头）" size="large" />
           </n-form-item>
           <n-form-item label="邮箱">
-            <n-input v-model:value="form.email" placeholder="请输入邮箱地址" size="large" />
+            <div class="email-row">
+              <n-input v-model:value="form.email" placeholder="请输入邮箱地址" size="large" />
+              <n-button
+                v-if="registerEmailVerify"
+                class="email-send-btn"
+                size="large"
+                :loading="sendingEmailCode"
+                :disabled="emailCodeCountdown > 0"
+                @click="onSendEmailCode"
+              >
+                {{ sendCodeButtonText }}
+              </n-button>
+            </div>
+          </n-form-item>
+          <n-form-item v-if="registerEmailVerify" label="邮箱验证码">
+            <n-input v-model:value="form.email_code" placeholder="请输入邮箱验证码" size="large" />
           </n-form-item>
           <n-form-item label="密码">
             <n-input v-model:value="form.password" type="password" show-password-on="click" placeholder="请输入密码（至少 8 位）" size="large" />
+          </n-form-item>
+          <n-form-item label="确认密码">
+            <n-input v-model:value="form.confirm_password" type="password" show-password-on="click" placeholder="请再次输入密码" size="large" />
           </n-form-item>
           <div class="action-row">
             <n-button type="primary" size="large" block :loading="loading" @click="onRegister">立即注册</n-button>
             <n-button tertiary size="large" block @click="goLogin">已有账号，去登录</n-button>
           </div>
-          <p class="hint">用户名与密码规则与管理员账号保持一致。</p>
         </n-form>
       </div>
     </section>
@@ -206,15 +287,24 @@ onMounted(async () => {
   font-size: 24px;
 }
 
-.action-row {
-  display: grid;
+.email-row {
+  width: 100%;
+  display: flex;
   gap: 10px;
 }
 
-.hint {
-  margin: 12px 0 0;
-  font-size: 12px;
-  color: var(--text-2);
+.email-row :deep(.n-input) {
+  flex: 1;
+}
+
+.email-send-btn {
+  min-width: 116px;
+}
+
+.action-row {
+  display: grid;
+  gap: 10px;
+  margin-top: 14px;
 }
 
 @media (max-width: 840px) {
@@ -228,6 +318,14 @@ onMounted(async () => {
 
   .right-form {
     padding: 26px 22px;
+  }
+
+  .email-row {
+    flex-direction: column;
+  }
+
+  .email-send-btn {
+    width: 100%;
   }
 }
 </style>

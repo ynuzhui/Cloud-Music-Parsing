@@ -39,12 +39,12 @@ func (h *ParseHandler) ParseNetease(c *gin.Context) {
 		Quality string `json:"quality"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		util.Err(c, http.StatusBadRequest, "invalid request body")
+		util.Err(c, http.StatusBadRequest, "请求参数格式错误")
 		return
 	}
 	req.URL = strings.TrimSpace(req.URL)
 	if req.URL == "" {
-		util.Err(c, http.StatusBadRequest, "url is required")
+		util.Err(c, http.StatusBadRequest, "链接不能为空")
 		return
 	}
 
@@ -70,8 +70,8 @@ func (h *ParseHandler) Providers(c *gin.Context) {
 		"providers": []gin.H{
 			{
 				"id":          "netease",
-				"name":        "Netease Cloud Music",
-				"description": "Parse music.163.com links with EAPI encryption flow",
+				"name":        "网易云音乐",
+				"description": "解析 music.163.com 链接，使用 EAPI 加密流程",
 			},
 		},
 	})
@@ -83,12 +83,12 @@ func (h *ParseHandler) SearchSong(c *gin.Context) {
 		Limit   int    `json:"limit"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		util.Err(c, http.StatusBadRequest, "invalid request body")
+		util.Err(c, http.StatusBadRequest, "请求参数格式错误")
 		return
 	}
 	req.Keyword = strings.TrimSpace(req.Keyword)
 	if req.Keyword == "" {
-		util.Err(c, http.StatusBadRequest, "keyword is required")
+		util.Err(c, http.StatusBadRequest, "关键词不能为空")
 		return
 	}
 	results, err := h.parseService.SearchSong(c.Request.Context(), req.Keyword, req.Limit)
@@ -104,12 +104,12 @@ func (h *ParseHandler) PlaylistDetail(c *gin.Context) {
 		ID string `json:"id"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		util.Err(c, http.StatusBadRequest, "invalid request body")
+		util.Err(c, http.StatusBadRequest, "请求参数格式错误")
 		return
 	}
 	req.ID = strings.TrimSpace(req.ID)
 	if req.ID == "" {
-		util.Err(c, http.StatusBadRequest, "playlist id is required")
+		util.Err(c, http.StatusBadRequest, "歌单 ID 不能为空")
 		return
 	}
 	info, err := h.parseService.FetchPlaylistTracks(c.Request.Context(), req.ID)
@@ -125,12 +125,12 @@ func (h *ParseHandler) GetLyric(c *gin.Context) {
 		ID string `json:"id"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		util.Err(c, http.StatusBadRequest, "invalid request body")
+		util.Err(c, http.StatusBadRequest, "请求参数格式错误")
 		return
 	}
 	req.ID = strings.TrimSpace(req.ID)
 	if req.ID == "" {
-		util.Err(c, http.StatusBadRequest, "song id is required")
+		util.Err(c, http.StatusBadRequest, "歌曲 ID 不能为空")
 		return
 	}
 	lyric, err := h.parseService.FetchLyric(c.Request.Context(), req.ID)
@@ -146,12 +146,12 @@ func (h *ParseHandler) DownloadLyric(c *gin.Context) {
 		ID string `json:"id"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		util.Err(c, http.StatusBadRequest, "invalid request body")
+		util.Err(c, http.StatusBadRequest, "请求参数格式错误")
 		return
 	}
 	req.ID = strings.TrimSpace(req.ID)
 	if req.ID == "" {
-		util.Err(c, http.StatusBadRequest, "song id is required")
+		util.Err(c, http.StatusBadRequest, "歌曲 ID 不能为空")
 		return
 	}
 
@@ -170,12 +170,12 @@ func (h *ParseHandler) DownloadCover(c *gin.Context) {
 		ID string `json:"id"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		util.Err(c, http.StatusBadRequest, "invalid request body")
+		util.Err(c, http.StatusBadRequest, "请求参数格式错误")
 		return
 	}
 	req.ID = strings.TrimSpace(req.ID)
 	if req.ID == "" {
-		util.Err(c, http.StatusBadRequest, "song id is required")
+		util.Err(c, http.StatusBadRequest, "歌曲 ID 不能为空")
 		return
 	}
 

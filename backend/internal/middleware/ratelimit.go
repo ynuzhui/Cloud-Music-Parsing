@@ -51,7 +51,7 @@ func (l *MemoryRateLimiter) Middleware() gin.HandlerFunc {
 		if entry.Count > l.limit {
 			c.AbortWithStatusJSON(http.StatusTooManyRequests, gin.H{
 				"code": http.StatusTooManyRequests,
-				"msg":  "too many requests",
+				"msg":  "请求过于频繁，请稍后再试",
 			})
 			return
 		}

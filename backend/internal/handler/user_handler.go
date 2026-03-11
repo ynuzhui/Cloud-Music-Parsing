@@ -30,18 +30,18 @@ func NewUserHandler(db *gorm.DB, quotaSvc *service.QuotaService) *UserHandler {
 func (h *UserHandler) Me(c *gin.Context) {
 	claims, ok := c.Get(middleware.ContextClaimsKey)
 	if !ok {
-		util.Err(c, http.StatusUnauthorized, "missing auth context")
+		util.Err(c, http.StatusUnauthorized, "登录上下文缺失")
 		return
 	}
 	authClaims, ok := claims.(*security.Claims)
 	if !ok {
-		util.Err(c, http.StatusUnauthorized, "invalid auth context")
+		util.Err(c, http.StatusUnauthorized, "登录上下文无效")
 		return
 	}
 
 	var user model.User
 	if err := h.db.First(&user, authClaims.UserID).Error; err != nil {
-		util.Err(c, http.StatusUnauthorized, "user not found")
+		util.Err(c, http.StatusUnauthorized, "用户不存在")
 		return
 	}
 	groupName := ""
@@ -70,7 +70,7 @@ func (h *UserHandler) Me(c *gin.Context) {
 func (h *UserHandler) QuotaToday(c *gin.Context) {
 	userID, ok := currentUserID(c)
 	if !ok {
-		util.Err(c, http.StatusUnauthorized, "missing auth context")
+		util.Err(c, http.StatusUnauthorized, "登录上下文缺失")
 		return
 	}
 	snapshot, err := h.quotaService.Today(userID, c.ClientIP())
@@ -84,7 +84,7 @@ func (h *UserHandler) QuotaToday(c *gin.Context) {
 func (h *UserHandler) UsageTrend(c *gin.Context) {
 	userID, ok := currentUserID(c)
 	if !ok {
-		util.Err(c, http.StatusUnauthorized, "missing auth context")
+		util.Err(c, http.StatusUnauthorized, "登录上下文缺失")
 		return
 	}
 	days := 7

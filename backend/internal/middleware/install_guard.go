@@ -30,7 +30,7 @@ func RequireInstalled(state *InstallState) gin.HandlerFunc {
 		if !state.IsInstalled() {
 			c.AbortWithStatusJSON(http.StatusPreconditionRequired, gin.H{
 				"code": http.StatusPreconditionRequired,
-				"msg":  "system not installed, please complete /install",
+				"msg":  "系统尚未安装，请先完成 /install 流程",
 			})
 			return
 		}
