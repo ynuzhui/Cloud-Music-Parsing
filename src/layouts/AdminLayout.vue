@@ -1,8 +1,8 @@
 ﻿<script setup lang="ts">
 import { computed, h, onMounted } from "vue";
 import { RouterLink, RouterView, useRoute, useRouter } from "vue-router";
-import { NIcon, type GlobalThemeOverrides, type MenuOption, createDiscreteApi } from "naive-ui";
-import { ChartPie, Cookie, Settings, Logout, Music, ExternalLink, Users, Shield } from "@vicons/tabler";
+import { NIcon, type MenuOption, createDiscreteApi } from "naive-ui";
+import { ChartPie, Cookie, Settings, Logout, Music, ExternalLink, Users, Shield, Sun, Moon, DeviceDesktop } from "@vicons/tabler";
 import { useAuthStore } from "@/stores/auth";
 import { useSettingsStore } from "@/stores/settings";
 import { getSettings } from "@/api/modules/admin";
@@ -15,18 +15,24 @@ const { message } = createDiscreteApi(["message"]);
 
 const siteName = computed(() => settingsStore.siteName);
 const isSuperAdmin = computed(() => authStore.user?.role === "super_admin");
-const adminThemeOverrides: GlobalThemeOverrides = {
-  common: {
-    primaryColor: "#0f6fff",
-    primaryColorHover: "#2b80ff",
-    primaryColorPressed: "#0d4ed8",
-    primaryColorSuppl: "#0f6fff",
-    infoColor: "#0f6fff",
-    infoColorHover: "#2b80ff",
-    infoColorPressed: "#0d4ed8",
-    infoColorSuppl: "#0f6fff",
-  },
-};
+
+const themeIcon = computed(() => {
+  if (settingsStore.theme === "dark") return Moon;
+  if (settingsStore.theme === "light") return Sun;
+  return DeviceDesktop;
+});
+
+const themeLabel = computed(() => {
+  if (settingsStore.theme === "dark") return "深色";
+  if (settingsStore.theme === "light") return "浅色";
+  return "跟随系统";
+});
+
+function cycleTheme() {
+  const order = ["light", "dark", "system"] as const;
+  const idx = order.indexOf(settingsStore.theme);
+  settingsStore.setTheme(order[(idx + 1) % 3]);
+}
 
 onMounted(async () => {
   try {
@@ -113,7 +119,6 @@ function logout() {
 </script>
 
 <template>
-  <n-config-provider :theme-overrides="adminThemeOverrides">
     <main class="admin-shell">
       <n-layout has-sider class="admin-layout">
         <n-layout-sider
@@ -155,9 +160,21 @@ function logout() {
         <n-layout>
           <n-layout-header bordered class="admin-header">
             <div class="header-title">{{ siteName }}</div>
-            <div class="user-info">
-              <strong>{{ authStore.user?.username || "Admin" }}</strong>
-              <span>{{ authStore.user?.email }}</span>
+            <div class="header-right">
+              <n-tooltip trigger="hover">
+                <template #trigger>
+                  <n-button quaternary circle size="small" @click="cycleTheme">
+                    <template #icon>
+                      <n-icon size="18"><component :is="themeIcon" /></n-icon>
+                    </template>
+                  </n-button>
+                </template>
+                {{ themeLabel }}
+              </n-tooltip>
+              <div class="user-info">
+                <strong>{{ authStore.user?.username || "Admin" }}</strong>
+                <span>{{ authStore.user?.email }}</span>
+              </div>
             </div>
           </n-layout-header>
 
@@ -171,7 +188,6 @@ function logout() {
         </n-layout>
       </n-layout>
     </main>
-  </n-config-provider>
 </template>
 
 <style scoped>
@@ -182,6 +198,14 @@ function logout() {
     radial-gradient(42rem 32rem at 100% -8%, #d8e7ff 0%, transparent 56%),
     radial-gradient(32rem 28rem at 0% 110%, #ffe9d9 0%, transparent 52%),
     linear-gradient(135deg, #f5f8ff, #eef3ff);
+  transition: background 0.35s ease;
+}
+
+[data-theme="dark"] .admin-shell {
+  background:
+    radial-gradient(42rem 32rem at 100% -8%, rgba(30, 60, 120, 0.3) 0%, transparent 56%),
+    radial-gradient(32rem 28rem at 0% 110%, rgba(120, 60, 30, 0.15) 0%, transparent 52%),
+    linear-gradient(135deg, var(--bg-1), var(--bg-2));
 }
 
 .admin-layout {
@@ -190,8 +214,9 @@ function logout() {
 }
 
 .admin-sider {
-  background: rgba(255, 255, 255, 0.88);
+  background: var(--card-bg);
   backdrop-filter: blur(10px);
+  transition: background 0.35s ease;
 }
 
 .admin-sider :deep(.n-scrollbar),
@@ -225,14 +250,15 @@ function logout() {
   gap: 10px;
   padding: 0 18px;
   font-weight: 800;
-  border-bottom: 1px solid rgba(20, 41, 78, 0.08);
+  border-bottom: 1px solid var(--line-soft);
   flex-shrink: 0;
+  color: var(--text-1);
 }
 
 .sider-bottom {
   flex-shrink: 0;
   padding: 12px 12px 16px;
-  border-top: 1px solid rgba(20, 41, 78, 0.06);
+  border-top: 1px solid var(--line-soft);
   display: flex;
   flex-direction: column;
   gap: 4px;
@@ -248,21 +274,29 @@ function logout() {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  background: rgba(255, 255, 255, 0.86);
+  background: var(--card-bg);
   backdrop-filter: blur(8px);
   flex-shrink: 0;
+  transition: background 0.35s ease;
 }
 
 .header-title {
   font-size: 16px;
   font-weight: 700;
-  color: var(--text-1, #1a1a2e);
+  color: var(--text-1);
+}
+
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: 12px;
 }
 
 .user-info {
   display: flex;
   flex-direction: column;
   text-align: right;
+  color: var(--text-1);
 }
 
 .user-info span {

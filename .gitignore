@@ -30,6 +30,7 @@ tmpdata-*
 .idea/
 .DS_Store
 Thumbs.db
+.reference/
 
 # Local helper scripts (do not publish)
 启动开发.ps1

@@ -396,7 +396,7 @@ onMounted(() => {
 
 .table-card {
   border-radius: 16px;
-  background: rgba(255, 255, 255, 0.9);
+  background: var(--card-bg);
   border: 1px solid rgba(20, 41, 78, 0.08);
 }
 

@@ -177,12 +177,13 @@ onMounted(async () => {
 
 .right-form {
   padding: 42px 36px;
-  background: rgba(255, 255, 255, 0.92);
+  background: var(--card-bg);
 }
 
 .right-form h2 {
   margin: 0 0 20px;
   font-size: 24px;
+  color: var(--text-1);
 }
 
 .register-link {
@@ -201,5 +202,17 @@ onMounted(async () => {
   .right-form {
     padding: 26px 22px;
   }
+}
+
+[data-theme="dark"] .login-panel {
+  box-shadow: 0 30px 80px rgba(0, 0, 0, 0.4);
+}
+
+[data-theme="dark"] .orb-a {
+  background: radial-gradient(circle at center, rgba(44, 125, 255, 0.12), transparent 62%);
+}
+
+[data-theme="dark"] .orb-b {
+  background: radial-gradient(circle at center, rgba(255, 146, 56, 0.1), transparent 62%);
 }
 </style>
