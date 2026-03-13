@@ -124,9 +124,6 @@ func (s *SettingService) Save(settings SystemSettings) error {
 			return fmt.Errorf("开启 Cookie 自动校验前，请先完成 SMTP 配置")
 		}
 	}
-	if err := s.db.Where("key IN ?", []string{"captcha_login_enabled", "captcha_register_enabled"}).Delete(&model.Setting{}).Error; err != nil {
-		return err
-	}
 
 	ops := []struct {
 		Key       string
@@ -168,12 +165,18 @@ func (s *SettingService) Save(settings SystemSettings) error {
 		{"smtp_pass", settings.SMTP.Pass, true},
 		{"smtp_ssl", strconv.FormatBool(settings.SMTP.SSL), false},
 	}
-	for _, op := range ops {
-		if err := s.upsert(op.Key, op.Value, op.Encrypted); err != nil {
+
+	return s.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Where("key IN ?", []string{"captcha_login_enabled", "captcha_register_enabled"}).Delete(&model.Setting{}).Error; err != nil {
 			return err
 		}
-	}
-	return nil
+		for _, op := range ops {
+			if err := s.upsertTx(tx, op.Key, op.Value, op.Encrypted); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 }
 
 func (s *SettingService) Load() (SystemSettings, error) {
@@ -182,89 +185,103 @@ func (s *SettingService) Load() (SystemSettings, error) {
 			Name:        "Music Parser",
 			Keywords:    "music,parser,netease",
 			Description: "Music parsing service",
-			ICPNo:       "",
-			PoliceNo:    "",
 		},
 		Feature: FeatureSettings{
-			AllowRegister:       false,
-			RegisterEmailVerify: false,
 			DefaultParseQuality: "standard",
 			ParseRequireLogin:   true,
 			DefaultDailyLimit:   100,
 			DefaultConcurrency:  2,
-			CookieAutoVerify:    false,
 		},
 		Captcha: CaptchaSettings{
-			Enabled:             false,
-			Provider:            "geetest",
-			GeetestCaptchaID:    "",
-			GeetestCaptchaKey:   "",
-			CloudflareSiteKey:   "",
-			CloudflareSecretKey: "",
+			Provider: "geetest",
 		},
 		Redis: RedisSettings{
-			Enabled: false,
-			Host:    "127.0.0.1",
-			Port:    6379,
-			Pass:    "",
-			DB:      0,
+			Host: "127.0.0.1",
+			Port: 6379,
 		},
 		Proxy: ProxySettings{
-			Enabled:  false,
-			Host:     "",
-			Port:     0,
-			Username: "",
-			Password: "",
 			Protocol: "http",
 		},
 		SMTP: SMTPSettings{
-			Host: "",
 			Port: 465,
-			User: "",
-			Pass: "",
 			SSL:  true,
 		},
 	}
 
+	// Single query to load all settings
+	var rows []model.Setting
+	if err := s.db.Find(&rows).Error; err != nil {
+		return defaults, err
+	}
+	kv := make(map[string]string, len(rows))
+	for _, row := range rows {
+		value := row.Value
+		if row.Encrypted {
+			if plain, err := s.box.Decrypt(row.Value); err == nil {
+				value = plain
+			}
+		}
+		kv[row.Key] = strings.TrimSpace(value)
+	}
+
+	getString := func(key, fb string) string {
+		if v, ok := kv[key]; ok && v != "" {
+			return v
+		}
+		return fb
+	}
+	getBool := func(key string, fb bool) bool {
+		v := strings.ToLower(getString(key, strconv.FormatBool(fb)))
+		return v == "true" || v == "1" || v == "yes"
+	}
+	getInt := func(key string, fb int) int {
+		raw := getString(key, strconv.Itoa(fb))
+		n, err := strconv.Atoi(strings.TrimSpace(raw))
+		if err != nil {
+			return fb
+		}
+		return n
+	}
+
 	settings := defaults
-	settings.Site.Name = s.mustGetString("site_name", defaults.Site.Name)
-	settings.Site.Keywords = s.mustGetString("site_keywords", defaults.Site.Keywords)
-	settings.Site.Description = s.mustGetString("site_description", defaults.Site.Description)
-	settings.Site.ICPNo = s.mustGetString("site_icp_no", defaults.Site.ICPNo)
-	settings.Site.PoliceNo = s.mustGetString("site_police_no", defaults.Site.PoliceNo)
-	settings.Feature.AllowRegister = s.mustGetBool("allow_register", defaults.Feature.AllowRegister)
-	settings.Feature.RegisterEmailVerify = s.mustGetBool("register_email_verify", defaults.Feature.RegisterEmailVerify)
+	settings.Site.Name = getString("site_name", defaults.Site.Name)
+	settings.Site.Keywords = getString("site_keywords", defaults.Site.Keywords)
+	settings.Site.Description = getString("site_description", defaults.Site.Description)
+	settings.Site.ICPNo = getString("site_icp_no", "")
+	settings.Site.PoliceNo = getString("site_police_no", "")
+	settings.Feature.AllowRegister = getBool("allow_register", false)
+	settings.Feature.RegisterEmailVerify = getBool("register_email_verify", false)
 	settings.Feature.DefaultParseQuality = normalizeQuality(
-		s.mustGetString("default_parse_quality", defaults.Feature.DefaultParseQuality),
+		getString("default_parse_quality", defaults.Feature.DefaultParseQuality),
 		defaults.Feature.DefaultParseQuality,
 	)
-	settings.Feature.ParseRequireLogin = s.mustGetBool("parse_require_login", defaults.Feature.ParseRequireLogin)
-	settings.Feature.DefaultDailyLimit = s.mustGetInt("default_daily_parse_limit", defaults.Feature.DefaultDailyLimit)
-	settings.Feature.DefaultConcurrency = s.mustGetInt("default_concurrency_limit", defaults.Feature.DefaultConcurrency)
-	settings.Feature.CookieAutoVerify = s.mustGetBool("cookie_auto_verify", defaults.Feature.CookieAutoVerify)
-	settings.Captcha.Enabled = s.mustGetBool("captcha_enabled", defaults.Captcha.Enabled)
-	settings.Captcha.Provider = normalizeCaptchaProvider(s.mustGetString("captcha_provider", defaults.Captcha.Provider))
-	settings.Captcha.GeetestCaptchaID = s.mustGetString("captcha_geetest_captcha_id", defaults.Captcha.GeetestCaptchaID)
-	settings.Captcha.GeetestCaptchaKey = s.mustGetString("captcha_geetest_captcha_key", defaults.Captcha.GeetestCaptchaKey)
-	settings.Captcha.CloudflareSiteKey = s.mustGetString("captcha_cloudflare_site_key", defaults.Captcha.CloudflareSiteKey)
-	settings.Captcha.CloudflareSecretKey = s.mustGetString("captcha_cloudflare_secret_key", defaults.Captcha.CloudflareSecretKey)
+	settings.Feature.ParseRequireLogin = getBool("parse_require_login", defaults.Feature.ParseRequireLogin)
+	settings.Feature.DefaultDailyLimit = getInt("default_daily_parse_limit", defaults.Feature.DefaultDailyLimit)
+	settings.Feature.DefaultConcurrency = getInt("default_concurrency_limit", defaults.Feature.DefaultConcurrency)
+	settings.Feature.CookieAutoVerify = getBool("cookie_auto_verify", false)
+	settings.Captcha.Enabled = getBool("captcha_enabled", false)
+	settings.Captcha.Provider = normalizeCaptchaProvider(getString("captcha_provider", defaults.Captcha.Provider))
+	settings.Captcha.GeetestCaptchaID = getString("captcha_geetest_captcha_id", "")
+	settings.Captcha.GeetestCaptchaKey = getString("captcha_geetest_captcha_key", "")
+	settings.Captcha.CloudflareSiteKey = getString("captcha_cloudflare_site_key", "")
+	settings.Captcha.CloudflareSecretKey = getString("captcha_cloudflare_secret_key", "")
 	settings.Captcha = normalizeCaptchaSettings(settings.Captcha)
-	settings.Redis.Enabled = s.mustGetBool("redis_enabled", defaults.Redis.Enabled)
-	settings.Redis.Host = s.mustGetString("redis_host", defaults.Redis.Host)
-	settings.Redis.Port = s.mustGetInt("redis_port", defaults.Redis.Port)
-	settings.Redis.Pass = s.mustGetString("redis_pass", defaults.Redis.Pass)
-	settings.Redis.DB = s.mustGetInt("redis_db", defaults.Redis.DB)
-	settings.Proxy.Enabled = s.mustGetBool("proxy_enabled", defaults.Proxy.Enabled)
-	settings.Proxy.Host = s.mustGetString("proxy_host", defaults.Proxy.Host)
-	settings.Proxy.Port = s.mustGetInt("proxy_port", defaults.Proxy.Port)
-	settings.Proxy.Username = s.mustGetString("proxy_username", defaults.Proxy.Username)
-	settings.Proxy.Password = s.mustGetString("proxy_password", defaults.Proxy.Password)
-	settings.Proxy.Protocol = s.mustGetString("proxy_protocol", defaults.Proxy.Protocol)
-	settings.SMTP.Host = s.mustGetString("smtp_host", defaults.SMTP.Host)
-	settings.SMTP.Port = s.mustGetInt("smtp_port", defaults.SMTP.Port)
-	settings.SMTP.User = s.mustGetString("smtp_user", defaults.SMTP.User)
-	settings.SMTP.Pass = s.mustGetString("smtp_pass", defaults.SMTP.Pass)
-	settings.SMTP.SSL = s.mustGetBool("smtp_ssl", defaults.SMTP.SSL)
+	settings.Redis.Enabled = getBool("redis_enabled", false)
+	settings.Redis.Host = getString("redis_host", defaults.Redis.Host)
+	settings.Redis.Port = getInt("redis_port", defaults.Redis.Port)
+	settings.Redis.Pass = getString("redis_pass", "")
+	settings.Redis.DB = getInt("redis_db", 0)
+	settings.Proxy.Enabled = getBool("proxy_enabled", false)
+	settings.Proxy.Host = getString("proxy_host", "")
+	settings.Proxy.Port = getInt("proxy_port", 0)
+	settings.Proxy.Username = getString("proxy_username", "")
+	settings.Proxy.Password = getString("proxy_password", "")
+	settings.Proxy.Protocol = getString("proxy_protocol", defaults.Proxy.Protocol)
+	settings.SMTP.Host = getString("smtp_host", "")
+	settings.SMTP.Port = getInt("smtp_port", defaults.SMTP.Port)
+	settings.SMTP.User = getString("smtp_user", "")
+	settings.SMTP.Pass = getString("smtp_pass", "")
+	settings.SMTP.SSL = getBool("smtp_ssl", defaults.SMTP.SSL)
 
 	return settings, nil
 }
@@ -282,6 +299,10 @@ func (s *SettingService) ParseRequireLogin() bool {
 }
 
 func (s *SettingService) upsert(key string, plainValue string, encrypt bool) error {
+	return s.upsertTx(s.db, key, plainValue, encrypt)
+}
+
+func (s *SettingService) upsertTx(tx *gorm.DB, key string, plainValue string, encrypt bool) error {
 	storeValue := plainValue
 	if encrypt {
 		enc, err := s.box.Encrypt(plainValue)
@@ -296,7 +317,7 @@ func (s *SettingService) upsert(key string, plainValue string, encrypt bool) err
 		Value:     storeValue,
 		Encrypted: encrypt,
 	}
-	return s.db.Clauses(clause.OnConflict{
+	return tx.Clauses(clause.OnConflict{
 		Columns:   []clause.Column{{Name: "key"}},
 		DoUpdates: clause.AssignmentColumns([]string{"value", "encrypted", "updated_at"}),
 	}).Create(&row).Error

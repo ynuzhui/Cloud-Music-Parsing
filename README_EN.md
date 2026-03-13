@@ -1,112 +1,114 @@
-# Cloud Music Parsing
+<p align="center">
+  <img src="./src/assets/logo-yunyin-full.svg" alt="Cloud Music Parsing" width="560">
+</p>
 
-English documentation. Chinese version: [README.md](./README.md).
+<p align="center">
+  Self-hosted Netease Cloud Music parsing system with integrated frontend & backend
+</p>
 
-Cloud Music Parsing is a self-hosted music parsing system focused on Netease Cloud Music, with an integrated frontend + backend deployment flow.
+<p align="center">
+  <a href="./LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="MIT License"></a>
+  <img src="https://img.shields.io/badge/Go-1.23-00ADD8?logo=go&logoColor=white" alt="Go 1.23">
+  <img src="https://img.shields.io/badge/Vue-3-4FC08D?logo=vuedotjs&logoColor=white" alt="Vue 3">
+  <img src="https://img.shields.io/badge/Docker-Ready-2496ED?logo=docker&logoColor=white" alt="Docker Ready">
+</p>
+
+<p align="center">
+  English | <a href="./README.md">中文</a>
+</p>
+
+---
 
 ## Features
 
-- Netease parsing with multiple quality levels
-- Song search, playlist parsing, lyric/cover download
-- First-run installation wizard (DB test + initial admin setup)
-- Multi-user system (user / admin / super admin)
-- User groups (default group, super-admin group, daily/concurrency quota, unlimited mode)
-- Site settings (including "parse requires login")
-- Captcha support (Geetest v4 bind, Cloudflare Turnstile; disabled by default)
-- Cookie management, proxy, Redis, SMTP, dashboard, audit logs
+- 🎵 Netease Cloud Music parsing (multiple quality levels)
+- 🔍 Song search, playlist parsing, lyric & cover download
+- 🧙 First-run installation wizard (DB test + admin setup)
+- 👥 Multi-user system (user / admin / super admin) with group-based quotas
+- 🛡️ Captcha support (Geetest v4, Cloudflare Turnstile)
+- ⚙️ Cookie management, proxy, Redis cache, SMTP mail, audit logs
 
 ## Tech Stack
 
-- Frontend: Vue 3, TypeScript, Vite, Naive UI, Pinia
-- Backend: Go, Gin, GORM
-- Database: SQLite (default) / MySQL (optional)
-- Cache: Memory (default) / Redis (optional)
+| Layer | Technologies |
+|:------|:-------------|
+| Frontend | Vue 3 · TypeScript · Vite · Naive UI · Pinia |
+| Backend | Go 1.23 · Gin · GORM |
+| Database | SQLite (default) / MySQL |
+| Cache | In-memory (default) / Redis |
 
-## Requirements
+## Quick Start
 
-- Node.js `18+`
-- npm
-- Go `1.23+`
-- Docker / Docker Compose (optional for container deployment)
+### Docker (Recommended)
 
-## Local Development
-
-### 1) Install dependencies
-
-```powershell
-npm install
-cd backend
-go mod tidy
-cd ..
-```
-
-### 2) Prepare data directory
-
-```powershell
-New-Item -ItemType Directory -Path .\data -Force | Out-Null
-```
-
-Note: `data/.env` is generated automatically after installation.
-
-### 3) Start
-
-Option A (recommended):
-
-```powershell
-.\启动开发.ps1
-```
-
-Option B (manual):
-
-Terminal A:
-
-```powershell
-cd backend
-go run ./cmd/server
-```
-
-Terminal B:
-
-```powershell
-npm run dev
-```
-
-### 4) Default URLs
-
-- Frontend (dev): `http://127.0.0.1:8099`
-- Backend health (dev): `http://127.0.0.1:8098/api/health`
-
-## Docker Deployment
-
-From project root:
-
-```powershell
+```bash
 docker build -t cloudmusic .
 docker compose up -d
 ```
 
-- App URL: `http://127.0.0.1:8099`
-- Health check: `http://127.0.0.1:8099/api/health`
-- Data volume: `./data -> /app/data`
-- Image and container name: `cloudmusic`
+Visit `http://127.0.0.1:8099` and follow the setup wizard.
 
-Notes:
+- Data persistence: `./data → /app/data`
+- Built-in HEALTHCHECK probes `/api/health` every 30s
+- After installation, the process drops privileges to the `app` user
 
-- Container timezone is set to `Asia/Shanghai` (UTC+8).
-- Before installation completes, startup follows the built-in init flow; after installation it restarts and runs as the `app` user.
+### Local Development
+
+```bash
+# Install dependencies
+npm install
+cd backend && go mod tidy && cd ..
+
+# Start (recommended)
+./启动开发.ps1
+
+# Or manually: Terminal A for backend, Terminal B for frontend
+cd backend && go run ./cmd/server   # Terminal A
+npm run dev                          # Terminal B
+```
+
+| Service | URL |
+|:--------|:----|
+| Frontend (dev) | `http://127.0.0.1:8099` |
+| Backend health | `http://127.0.0.1:8098/api/health` |
+
+## Environment Variables
+
+| Variable | Default | Description |
+|:---------|:--------|:------------|
+| `APP_PORT` | `8099` | Listen port |
+| `TZ` | `Asia/Shanghai` | Timezone |
+| `GIN_MODE` | `release` | Gin mode |
+| `RATE_LIMIT` | `30` | Max requests per IP per endpoint per window |
+| `RATE_WINDOW_SEC` | `60` | Rate limit window (seconds) |
+
+## Security & Performance
+
+| Feature | Details |
+|:--------|:--------|
+| Graceful shutdown | SIGINT / SIGTERM handling, request draining + connection cleanup |
+| HTTP timeouts | Read header 10s · Read 30s · Write 60s · Idle 120s |
+| JWT refresh | Silent token refresh before expiry with concurrent request queuing |
+| Audit masking | Request body truncated to 4KB, password/token/cookie fields auto-masked |
+| Scheduled cleanup | Audit logs & parse records purged after 90 days, expired codes after 7 days |
+| CDN-friendly | API responses `no-store`, hashed assets cached long-term, `index.html` never cached |
+| Rate limiting | IP + path based in-memory limiter, configurable via env |
+| Database | All model fields properly indexed |
+| Frontend | Route lazy loading · tree-shaken component imports |
 
 ## Installation Defaults
 
-After installation, the system ensures:
+After setup, the system automatically creates:
 
-- Default group: `默认组` (`默认用户组`)
-- Super admin group: `超级管理员组` (`超级管理员用户组`, unlimited mode enabled by default)
-- The super admin account is automatically assigned to the super admin group
+- **Default group** — new users are assigned here on registration
+- **Super admin group** — unlimited parsing, super admin auto-assigned
 
-The project enforces Beijing time (UTC+8) for time/quota calculations.
+All time and quota calculations use Beijing time (UTC+8).
+
+## License
+
+[MIT](./LICENSE)
 
 ## Disclaimer
 
-- This project is for technical learning and research only.
-- Please comply with local laws and platform terms of service.
-- Please support officially licensed music content.
+This project is for technical learning and research only. Please comply with local laws and platform terms of service. Support officially licensed music.

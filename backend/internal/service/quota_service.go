@@ -54,13 +54,17 @@ func (s *QuotaService) AcquireParseQuota(userID uint, requestIP string) (func(),
 		return nil, nil, errors.New("已达到每日解析次数上限")
 	}
 
+	// Atomically check concurrency and acquire slot under a single lock
 	key := s.concurrentKey(userID, requestIP)
-	current := s.getInFlight(key)
+	s.mu.Lock()
+	current := s.inFlight[key]
 	if effective.ConcurrencyLimit > 0 && current >= effective.ConcurrencyLimit {
+		s.mu.Unlock()
 		return nil, nil, errors.New("已达到并发上限")
 	}
+	s.inFlight[key] = current + 1
+	s.mu.Unlock()
 
-	s.incInFlight(key, 1)
 	released := false
 	release := func() {
 		s.mu.Lock()

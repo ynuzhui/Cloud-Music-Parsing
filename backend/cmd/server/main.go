@@ -8,9 +8,12 @@ import (
 	"mime"
 	"net/http"
 	"os"
+	"os/signal"
 	"path"
+	"strconv"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"go-music-aggregator/backend/internal/config"
@@ -33,6 +36,8 @@ const (
 	defaultEnvPathAlt      = "./data/.env"
 	defaultBackendHTTPPort = "8098"
 	backendHTTPPortEnvKey  = "APP_PORT"
+	defaultRateLimit       = 30
+	defaultRateWindowSec   = 60
 	defaultUserGroupName   = "默认组"
 	defaultUserGroupDesc   = "默认用户组"
 	superUserGroupName     = "超级管理员组"
@@ -47,6 +52,11 @@ func main() {
 	restartCh := make(chan struct{}, 1)
 	exitForExternalRestart := shouldExitForExternalRestart()
 
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+
+	var prevDB *gorm.DB
+
 	for {
 		runtimeCtx, runtimeCancel := context.WithCancel(context.Background())
 		cfg, err := config.Load(envFilePath)
@@ -55,11 +65,13 @@ func main() {
 		}
 
 		state := middleware.NewInstallState(cfg.InstallDone)
-		limiter := middleware.NewMemoryRateLimiter(30, time.Minute)
+		rateLimit, rateWindow := resolveRateLimitConfig()
+		limiter := middleware.NewMemoryRateLimiter(rateLimit, rateWindow)
 
 		router := gin.New()
 		router.Use(gin.Recovery())
 		router.Use(gin.Logger())
+		router.Use(middleware.NoCacheAPI())
 
 		installSvc := service.NewInstallService(cfg.EnvFile)
 		installHandler := handler.NewInstallHandler(state, installSvc, cfg.AutoRestartInstall, restartCh)
@@ -78,9 +90,17 @@ func main() {
 		}
 
 		if cfg.InstallDone {
-			if err := mountInstalledRoutes(runtimeCtx, router, cfg, limiter, state); err != nil {
-				log.Fatalf("mount installed routes failed: %v", err)
+			db, mountErr := mountInstalledRoutes(runtimeCtx, router, cfg, limiter, state)
+			if mountErr != nil {
+				log.Fatalf("mount installed routes failed: %v", mountErr)
 			}
+			// Close previous DB connection pool on restart
+			if prevDB != nil {
+				if sqlDB, err := prevDB.DB(); err == nil {
+					_ = sqlDB.Close()
+				}
+			}
+			prevDB = db
 		} else {
 			router.Any("/api/auth/*path", notInstalled)
 			router.Any("/api/music/*path", notInstalled)
@@ -89,8 +109,12 @@ func main() {
 		mountFrontendRoutes(router, distPath, state)
 
 		srv := &http.Server{
-			Addr:    ":" + backendHTTPPort,
-			Handler: router,
+			Addr:              ":" + backendHTTPPort,
+			Handler:           router,
+			ReadHeaderTimeout: 10 * time.Second,
+			ReadTimeout:       30 * time.Second,
+			WriteTimeout:      60 * time.Second,
+			IdleTimeout:       120 * time.Second,
 		}
 
 		go func() {
@@ -100,13 +124,31 @@ func main() {
 			}
 		}()
 
-		// Block until restart signal
-		<-restartCh
-		log.Println("received restart signal, shutting down...")
-		runtimeCancel()
+		// Block until restart or OS signal
+		select {
+		case <-restartCh:
+			log.Println("received restart signal, shutting down...")
+		case sig := <-sigCh:
+			log.Printf("received signal %v, shutting down...", sig)
+			runtimeCancel()
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			if err := srv.Shutdown(ctx); err != nil {
+				log.Printf("server shutdown error: %v", err)
+			}
+			cancel()
+			if prevDB != nil {
+				if sqlDB, err := prevDB.DB(); err == nil {
+					_ = sqlDB.Close()
+				}
+			}
+			return
+		}
 
+		runtimeCancel()
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		_ = srv.Shutdown(ctx)
+		if err := srv.Shutdown(ctx); err != nil {
+			log.Printf("server shutdown error: %v", err)
+		}
 		cancel()
 
 		if exitForExternalRestart {
@@ -123,6 +165,22 @@ func resolveBackendHTTPPort() string {
 		return defaultBackendHTTPPort
 	}
 	return port
+}
+
+func resolveRateLimitConfig() (int, time.Duration) {
+	limit := defaultRateLimit
+	if raw := strings.TrimSpace(os.Getenv("RATE_LIMIT")); raw != "" {
+		if n, err := strconv.Atoi(raw); err == nil && n > 0 {
+			limit = n
+		}
+	}
+	windowSec := defaultRateWindowSec
+	if raw := strings.TrimSpace(os.Getenv("RATE_WINDOW_SEC")); raw != "" {
+		if n, err := strconv.Atoi(raw); err == nil && n > 0 {
+			windowSec = n
+		}
+	}
+	return limit, time.Duration(windowSec) * time.Second
 }
 
 func resolveEnvFilePath() string {
@@ -215,24 +273,24 @@ func dirExists(p string) bool {
 	return err == nil && info.IsDir()
 }
 
-func mountInstalledRoutes(runtimeCtx context.Context, router *gin.Engine, cfg config.Config, limiter *middleware.MemoryRateLimiter, state *middleware.InstallState) error {
+func mountInstalledRoutes(runtimeCtx context.Context, router *gin.Engine, cfg config.Config, limiter *middleware.MemoryRateLimiter, state *middleware.InstallState) (*gorm.DB, error) {
 	db, err := database.Open(cfg)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if err := database.AutoMigrate(db); err != nil {
-		return err
+		return nil, err
 	}
 	if err := ensureFixedSuperAdmin(db); err != nil {
-		return err
+		return nil, err
 	}
 	if err := ensureBuiltinUserGroups(db); err != nil {
-		return err
+		return nil, err
 	}
 
 	box, err := security.NewSecretBox(cfg.MasterKey)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	jwtMgr := security.NewJWTManager(cfg.JWTSecret, cfg.JWTIssuer)
 	settingSvc := service.NewSettingService(db, box)
@@ -245,6 +303,8 @@ func mountInstalledRoutes(runtimeCtx context.Context, router *gin.Engine, cfg co
 	cookieAutoVerifyJob := service.NewCookieAutoVerifyJob(db, box, parseSvc, settingSvc, mailSvc)
 	_ = parseSvc.RefreshCacheBackend(runtimeCtx)
 	go cookieAutoVerifyJob.Run(runtimeCtx)
+	cleanupJob := service.NewCleanupJob(db)
+	go cleanupJob.Run(runtimeCtx)
 	publicHandler := handler.NewPublicHandler(settingSvc)
 
 	router.Use(middleware.AuditLog(db))
@@ -263,6 +323,7 @@ func mountInstalledRoutes(runtimeCtx context.Context, router *gin.Engine, cfg co
 		authRoutes.POST("/register/email-code", limiter.Middleware(), authHandler.SendRegisterEmailCode)
 		authRoutes.POST("/register", limiter.Middleware(), authHandler.Register)
 		authRoutes.GET("/me", middleware.JWTAuth(jwtMgr, db), userHandler.Me)
+		authRoutes.POST("/refresh", middleware.JWTAuth(jwtMgr, db), authHandler.RefreshToken)
 	}
 
 	musicRoutes := router.Group("/api/music")
@@ -312,7 +373,7 @@ func mountInstalledRoutes(runtimeCtx context.Context, router *gin.Engine, cfg co
 		userRoutes.GET("/quota/today", userHandler.QuotaToday)
 		userRoutes.GET("/usage/trend", userHandler.UsageTrend)
 	}
-	return nil
+	return db, nil
 }
 
 func notInstalled(c *gin.Context) {
@@ -349,6 +410,7 @@ func mountFrontendRoutes(router *gin.Engine, distDir string, state *middleware.I
 		if cleaned != "" && cleaned != "." {
 			candidate := filepath.Join(distDir, filepath.FromSlash(cleaned))
 			if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
+				setStaticCacheHeaders(c, cleaned)
 				c.File(candidate)
 				return
 			}
@@ -361,6 +423,7 @@ func mountFrontendRoutes(router *gin.Engine, distDir string, state *middleware.I
 			c.Redirect(http.StatusFound, target)
 			return
 		}
+		c.Header("Cache-Control", "no-cache, no-store, must-revalidate")
 		c.File(indexFile)
 	})
 }
@@ -382,6 +445,7 @@ func mountFrontendRoutesFromFS(router *gin.Engine, frontendFS fs.FS, state *midd
 		cleaned := strings.TrimPrefix(cleanedPath, "/")
 		if cleaned != "" && cleaned != "." {
 			if fileBytes, readErr := fs.ReadFile(frontendFS, cleaned); readErr == nil {
+				setStaticCacheHeaders(c, cleaned)
 				c.Data(http.StatusOK, detectContentType(cleaned, fileBytes), fileBytes)
 				return
 			}
@@ -394,6 +458,7 @@ func mountFrontendRoutesFromFS(router *gin.Engine, frontendFS fs.FS, state *midd
 			c.Redirect(http.StatusFound, target)
 			return
 		}
+		c.Header("Cache-Control", "no-cache, no-store, must-revalidate")
 		c.Data(http.StatusOK, "text/html; charset=utf-8", indexBytes)
 	})
 	return nil
@@ -431,6 +496,17 @@ func detectContentType(filePath string, content []byte) string {
 		}
 	}
 	return http.DetectContentType(content)
+}
+
+// setStaticCacheHeaders 根据文件路径设置分级缓存策略：
+// - /assets/ 下带 hash 的构建产物：长期缓存（1年，immutable）
+// - 其他静态文件（favicon 等）：短期缓存（1天）
+func setStaticCacheHeaders(c *gin.Context, filePath string) {
+	if strings.HasPrefix(filePath, "assets/") {
+		c.Header("Cache-Control", "public, max-age=31536000, immutable")
+	} else {
+		c.Header("Cache-Control", "public, max-age=86400")
+	}
 }
 
 func ensureFixedSuperAdmin(db *gorm.DB) error {

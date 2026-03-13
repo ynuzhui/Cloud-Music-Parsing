@@ -121,6 +121,20 @@ function onConcurrencyLimitBlur() {
   numericDraft.concurrencyLimit = String(featureForm.default_concurrency_limit);
 }
 
+function isSmtpConfigured(): boolean {
+  const smtp = fullSettings.value?.smtp;
+  if (!smtp) return false;
+  return !!(smtp.host?.trim()) && Number(smtp.port || 0) > 0 && !!(smtp.user?.trim());
+}
+
+function onCookieAutoVerifyChange(value: boolean) {
+  if (value && !isSmtpConfigured()) {
+    message.warning("请先前往 SMTP 配置页完成发件服务设置后再开启此功能");
+    return;
+  }
+  featureForm.cookie_auto_verify = value;
+}
+
 async function loadSettings() {
   loading.value = true;
   try {
@@ -158,16 +172,6 @@ async function onSave() {
   if (hasNumericInputError.value) {
     message.warning("请先修正数字输入项后再保存");
     return;
-  }
-  if (featureForm.cookie_auto_verify) {
-    const smtp = fullSettings.value.smtp;
-    const hostReady = !!smtp?.host?.trim();
-    const userReady = !!smtp?.user?.trim();
-    const portReady = Number(smtp?.port || 0) > 0;
-    if (!hostReady || !userReady || !portReady) {
-      message.warning("开启 Cookie 自动校验前，请先在 SMTP 配置中完成发件服务设置");
-      return;
-    }
   }
   saving.value = true;
   try {
@@ -252,9 +256,8 @@ onBeforeUnmount(() => {
             <n-form-item label="是否必须登录后解析">
               <n-switch v-model:value="featureForm.parse_require_login" />
             </n-form-item>
-            <n-form-item label="Cookie 自动校验（北京时间 00/06/12/18 点）">
-              <n-switch v-model:value="featureForm.cookie_auto_verify" />
-              <div class="field-tip">开启前请先在 SMTP 配置中完成发件服务设置，校验失败将邮件通知超级管理员。</div>
+            <n-form-item label="Cookie 自动校验">
+              <n-switch :value="featureForm.cookie_auto_verify" @update:value="onCookieAutoVerifyChange" />
             </n-form-item>
             <n-form-item label="默认解析音质">
               <n-select

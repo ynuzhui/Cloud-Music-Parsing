@@ -3,18 +3,19 @@ import { useAppStore } from "@/stores/app";
 import { useAuthStore } from "@/stores/auth";
 import { useSettingsStore } from "@/stores/settings";
 import HomeView from "@/views/HomeView.vue";
-import InstallView from "@/views/InstallView.vue";
-import LoginView from "@/views/LoginView.vue";
-import RegisterView from "@/views/RegisterView.vue";
-import AdminLayout from "@/layouts/AdminLayout.vue";
-import DashboardView from "@/views/admin/DashboardView.vue";
-import CookiesView from "@/views/admin/CookiesView.vue";
-import SettingsView from "@/views/admin/SettingsView.vue";
-import RedisSettingsView from "@/views/admin/RedisSettingsView.vue";
-import SmtpSettingsView from "@/views/admin/SmtpSettingsView.vue";
-import ProxySettingsView from "@/views/admin/ProxySettingsView.vue";
-import UsersView from "@/views/admin/UsersView.vue";
-import UserGroupsView from "@/views/admin/UserGroupsView.vue";
+
+const InstallView = () => import("@/views/InstallView.vue");
+const LoginView = () => import("@/views/LoginView.vue");
+const RegisterView = () => import("@/views/RegisterView.vue");
+const AdminLayout = () => import("@/layouts/AdminLayout.vue");
+const DashboardView = () => import("@/views/admin/DashboardView.vue");
+const CookiesView = () => import("@/views/admin/CookiesView.vue");
+const SettingsView = () => import("@/views/admin/SettingsView.vue");
+const RedisSettingsView = () => import("@/views/admin/RedisSettingsView.vue");
+const SmtpSettingsView = () => import("@/views/admin/SmtpSettingsView.vue");
+const ProxySettingsView = () => import("@/views/admin/ProxySettingsView.vue");
+const UsersView = () => import("@/views/admin/UsersView.vue");
+const UserGroupsView = () => import("@/views/admin/UserGroupsView.vue");
 
 const router = createRouter({
   history: createWebHistory(),

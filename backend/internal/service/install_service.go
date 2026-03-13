@@ -323,7 +323,9 @@ func writeEnvFile(path string, values map[string]string) error {
 
 func randHex(size int) string {
 	buf := make([]byte, size)
-	_, _ = rand.Read(buf)
+	if _, err := rand.Read(buf); err != nil {
+		panic(fmt.Sprintf("crypto/rand failed: %v", err))
+	}
 	return hex.EncodeToString(buf)
 }
 

@@ -147,7 +147,7 @@ func (h *AdminHandler) AddCookie(c *gin.Context) {
 
 func (h *AdminHandler) ListCookies(c *gin.Context) {
 	var rows []model.Cookie
-	if err := h.db.Order("id desc").Find(&rows).Error; err != nil {
+	if err := h.db.Order("id desc").Limit(500).Find(&rows).Error; err != nil {
 		util.Err(c, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -336,18 +336,38 @@ func (h *AdminHandler) VerifyAllCookies(c *gin.Context) {
 }
 
 func (h *AdminHandler) AuditLogs(c *gin.Context) {
-	limit := 50
-	if raw := strings.TrimSpace(c.Query("limit")); raw != "" {
-		if n, err := strconv.Atoi(raw); err == nil && n > 0 && n <= 200 {
-			limit = n
-		}
+	page := parseIntWithRange(c.Query("page"), 1, 1, 1000000)
+	pageSize := parseIntWithRange(c.Query("page_size"), 50, 1, 200)
+
+	query := h.db.Model(&model.AuditLog{})
+
+	if method := strings.TrimSpace(c.Query("method")); method != "" {
+		query = query.Where("method = ?", strings.ToUpper(method))
 	}
-	var rows []model.AuditLog
-	if err := h.db.Order("id desc").Limit(limit).Find(&rows).Error; err != nil {
+	if ip := strings.TrimSpace(c.Query("ip")); ip != "" {
+		query = query.Where("ip = ?", ip)
+	}
+	if pathQ := strings.TrimSpace(c.Query("path")); pathQ != "" {
+		query = query.Where("path LIKE ?", "%"+pathQ+"%")
+	}
+
+	var total int64
+	if err := query.Count(&total).Error; err != nil {
 		util.Err(c, http.StatusInternalServerError, err.Error())
 		return
 	}
-	util.OK(c, rows)
+
+	var rows []model.AuditLog
+	if err := query.Order("id desc").Offset((page - 1) * pageSize).Limit(pageSize).Find(&rows).Error; err != nil {
+		util.Err(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	util.OK(c, gin.H{
+		"items":     rows,
+		"total":     total,
+		"page":      page,
+		"page_size": pageSize,
+	})
 }
 
 func (h *AdminHandler) SmtpTest(c *gin.Context) {

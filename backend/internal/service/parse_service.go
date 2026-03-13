@@ -25,13 +25,15 @@ import (
 )
 
 const (
-	cacheTTLParseLink   = 2 * time.Minute
-	cacheTTLSongDetail  = 20 * time.Minute
-	cacheTTLSearch      = 20 * time.Minute
-	cacheTTLPlaylist    = 20 * time.Minute
-	cacheTTLLyric       = 6 * time.Hour
-	playlistDetailChunk = 500
-	defaultParseQuality = "standard"
+	cacheTTLParseLink    = 2 * time.Minute
+	cacheTTLSongDetail   = 20 * time.Minute
+	cacheTTLSearch       = 20 * time.Minute
+	cacheTTLPlaylist     = 20 * time.Minute
+	cacheTTLLyric        = 6 * time.Hour
+	playlistDetailChunk  = 500
+	defaultParseQuality  = "standard"
+	maxResponseBodySize  = 10 << 20 // 10 MB
+	maxCoverBodySize     = 20 << 20 // 20 MB
 )
 
 type ParseResult struct {
@@ -98,6 +100,9 @@ type ParseService struct {
 	qualityMu      sync.RWMutex
 	cacheMu        sync.RWMutex
 	cache          cache.Cache
+	httpMu         sync.RWMutex
+	httpClient     *http.Client
+	httpProxyURL   string // track current proxy config to detect changes
 }
 
 func NewParseService(db *gorm.DB, settingSvc *SettingService, box *security.SecretBox) *ParseService {
@@ -107,6 +112,7 @@ func NewParseService(db *gorm.DB, settingSvc *SettingService, box *security.Secr
 		box:            box,
 		defaultQuality: defaultParseQuality,
 		cache:          cache.NewMemoryCache(),
+		httpClient:     &http.Client{Timeout: 20 * time.Second},
 	}
 }
 
@@ -368,7 +374,7 @@ func (s *ParseService) BuildCoverDownload(ctx context.Context, songID string) (s
 		return "", "", nil, fmt.Errorf("封面接口返回异常状态码：%d", resp.StatusCode)
 	}
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxCoverBodySize))
 	if err != nil {
 		return "", "", nil, err
 	}
@@ -861,7 +867,7 @@ func (s *ParseService) doEAPIPostRaw(ctx context.Context, apiPath string, rawPay
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBodySize))
 	if err != nil {
 		return nil, err
 	}
@@ -1206,15 +1212,41 @@ func positiveInt(v int) int {
 }
 
 func (s *ParseService) buildHTTPClient() *http.Client {
-	client := &http.Client{Timeout: 20 * time.Second}
 	settings, _ := s.settingService.Load()
-	if settings.Proxy.Enabled && strings.TrimSpace(settings.Proxy.BuildURL()) != "" {
-		proxyURL, err := url.Parse(settings.Proxy.BuildURL())
-		if err == nil {
-			client.Transport = &http.Transport{Proxy: http.ProxyURL(proxyURL)}
+	var wantProxy string
+	if settings.Proxy.Enabled {
+		wantProxy = strings.TrimSpace(settings.Proxy.BuildURL())
+	}
+
+	s.httpMu.RLock()
+	if s.httpClient != nil && s.httpProxyURL == wantProxy {
+		c := s.httpClient
+		s.httpMu.RUnlock()
+		return c
+	}
+	s.httpMu.RUnlock()
+
+	// Rebuild client with updated proxy
+	s.httpMu.Lock()
+	defer s.httpMu.Unlock()
+	// Double-check after acquiring write lock
+	if s.httpClient != nil && s.httpProxyURL == wantProxy {
+		return s.httpClient
+	}
+
+	transport := &http.Transport{
+		MaxIdleConns:        100,
+		MaxIdleConnsPerHost: 20,
+		IdleConnTimeout:     90 * time.Second,
+	}
+	if wantProxy != "" {
+		if proxyURL, err := url.Parse(wantProxy); err == nil {
+			transport.Proxy = http.ProxyURL(proxyURL)
 		}
 	}
-	return client
+	s.httpClient = &http.Client{Timeout: 20 * time.Second, Transport: transport}
+	s.httpProxyURL = wantProxy
+	return s.httpClient
 }
 
 func (s *ParseService) setNeteaseHeaders(req *http.Request) {

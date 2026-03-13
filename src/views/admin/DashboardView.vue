@@ -318,18 +318,25 @@ onMounted(loadStats);
   align-items: center;
   justify-content: space-between;
   gap: 16px;
+  background: linear-gradient(160deg, rgba(11, 83, 206, 0.92), rgba(13, 121, 198, 0.88));
+  backdrop-filter: blur(12px);
+  border: 1px solid var(--line-soft);
+  border-radius: 18px;
+  padding: 22px 24px;
+  color: #fff;
+  transition: background 0.35s ease, border-color 0.25s ease;
 }
 
 .header-title {
   margin: 0;
   font-size: 26px;
   line-height: 1.15;
-  color: #183357;
+  color: #fff;
 }
 
 .header-desc {
   margin: 8px 0 0;
-  color: #547199;
+  color: rgba(255, 255, 255, 0.85);
   font-size: 14px;
 }
 
@@ -345,11 +352,13 @@ onMounted(loadStats);
 }
 
 .stat-card {
-  border: 1px solid #dde5f3;
-  border-radius: 20px;
-  background: rgba(255, 255, 255, 0.92);
-  box-shadow: 0 10px 26px rgba(16, 40, 89, 0.06);
+  border: 1px solid var(--line-soft);
+  border-radius: 18px;
+  background: var(--card-bg);
+  backdrop-filter: blur(12px);
+  box-shadow: 0 8px 20px rgba(16, 40, 89, 0.04);
   padding: 14px 16px;
+  transition: background 0.35s ease, border-color 0.25s ease;
 }
 
 .card-head {
@@ -363,7 +372,7 @@ onMounted(loadStats);
   display: flex;
   align-items: center;
   gap: 8px;
-  color: #1e3a63;
+  color: var(--text-1);
   font-size: 16px;
 }
 
@@ -425,14 +434,14 @@ onMounted(loadStats);
 
 .metric-label {
   font-size: 13px;
-  color: #6d829f;
+  color: var(--text-2);
 }
 
 .metric-value {
   font-size: 20px;
   line-height: 1.1;
   font-weight: 700;
-  color: #1c3559;
+  color: var(--text-1);
 }
 
 .metric-change {
@@ -471,11 +480,13 @@ onMounted(loadStats);
 }
 
 .analysis-card {
-  border: 1px solid #dde5f3;
-  border-radius: 22px;
-  background: rgba(255, 255, 255, 0.92);
-  box-shadow: 0 12px 30px rgba(16, 40, 89, 0.05);
+  border: 1px solid var(--line-soft);
+  border-radius: 18px;
+  background: var(--card-bg);
+  backdrop-filter: blur(12px);
+  box-shadow: 0 8px 20px rgba(16, 40, 89, 0.04);
   padding: 18px 18px 14px;
+  transition: background 0.35s ease, border-color 0.25s ease;
 }
 
 .analysis-header {
@@ -483,20 +494,20 @@ onMounted(loadStats);
   align-items: center;
   justify-content: space-between;
   gap: 14px;
-  border-bottom: 1px solid #ecf1fa;
+  border-bottom: 1px solid var(--line-soft);
   padding-bottom: 12px;
 }
 
 .analysis-title-row h3 {
   margin: 0;
   font-size: 22px;
-  color: #183357;
+  color: var(--text-1);
 }
 
 .analysis-title-row p {
   margin: 6px 0 0;
   font-size: 13px;
-  color: #6d829f;
+  color: var(--text-2);
 }
 
 .analysis-tabs {
@@ -509,13 +520,13 @@ onMounted(loadStats);
 .analysis-tabs .tab-btn:not(:last-child)::after {
   content: "/";
   margin-left: 12px;
-  color: #becbe0;
+  color: var(--line-soft);
 }
 
 .tab-btn {
   border: none;
   background: transparent;
-  color: #7a8da8;
+  color: var(--text-2);
   font-size: 17px;
   font-weight: 600;
   cursor: pointer;
@@ -523,7 +534,7 @@ onMounted(loadStats);
 }
 
 .tab-btn.active {
-  color: #17325a;
+  color: var(--text-1);
 }
 
 .analysis-summary {
@@ -531,7 +542,7 @@ onMounted(loadStats);
   align-items: center;
   gap: 16px;
   margin: 14px 0 8px;
-  color: #3d5576;
+  color: var(--text-2);
   font-size: 14px;
 }
 
@@ -556,15 +567,15 @@ onMounted(loadStats);
 
 .bar-top {
   font-size: 12px;
-  color: #6f87a6;
+  color: var(--text-2);
 }
 
 .bar-track {
   width: 100%;
   height: 180px;
   border-radius: 10px;
-  background: linear-gradient(180deg, rgba(250, 251, 255, 0.8), rgba(243, 247, 253, 0.9));
-  border: 1px solid #edf2fa;
+  background: var(--tag-bg);
+  border: 1px solid var(--line-soft);
   display: flex;
   align-items: flex-end;
   justify-content: center;
@@ -576,16 +587,16 @@ onMounted(loadStats);
   width: calc(100% - 14px);
   min-width: 12px;
   border-radius: 8px 8px 2px 2px;
-  background: linear-gradient(180deg, #3f80ff 0%, #0f6fff 100%);
+  background: linear-gradient(180deg, var(--brand) 0%, var(--brand-deep) 100%);
 }
 
 .bar-label {
   font-size: 12px;
-  color: #6f87a6;
+  color: var(--text-2);
 }
 
 .empty-tip {
-  color: #7a8da8;
+  color: var(--text-2);
   font-size: 14px;
   text-align: center;
   padding: 30px 0 26px;

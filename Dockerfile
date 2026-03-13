@@ -16,12 +16,13 @@ COPY backend/go.mod backend/go.sum ./
 RUN go mod download
 
 COPY backend/. .
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o /app/server ./cmd/server
+ARG TARGETARCH=amd64
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build -o /app/server ./cmd/server
 
 FROM alpine:3.20
 WORKDIR /app/backend
 
-RUN apk add --no-cache su-exec ca-certificates tzdata \
+RUN apk add --no-cache su-exec ca-certificates tzdata curl \
     && addgroup -S -g 1001 app \
     && adduser -S -D -H -u 1001 -G app app \
     && mkdir -p /app/data /app/dist /app/backend
@@ -38,4 +39,6 @@ ENV TZ=Asia/Shanghai
 ENV GIN_MODE=release
 
 EXPOSE 8099
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+    CMD curl -sf http://localhost:${APP_PORT}/api/health || exit 1
 ENTRYPOINT ["/app/entrypoint.sh"]

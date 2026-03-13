@@ -14,7 +14,7 @@ interface SettingsState {
 }
 
 const STORAGE_KEY = "mp_settings";
-const DEFAULT_SITE_NAME = "Cloud Music Parsing";
+const DEFAULT_SITE_NAME = "云音解析";
 
 function normalizeSiteName(name: unknown): string {
   const value = typeof name === "string" ? name.trim() : "";

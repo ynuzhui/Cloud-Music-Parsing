@@ -133,7 +133,7 @@ func (s *ParseService) callNeteaseAPI(ctx context.Context, method, endpoint stri
 	}
 	defer resp.Body.Close()
 
-	raw, err := io.ReadAll(resp.Body)
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBodySize))
 	if err != nil {
 		return err
 	}

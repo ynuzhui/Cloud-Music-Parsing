@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	"go-music-aggregator/backend/internal/middleware"
 	"go-music-aggregator/backend/internal/model"
 	"go-music-aggregator/backend/internal/security"
 	"go-music-aggregator/backend/internal/service"
@@ -226,4 +227,51 @@ func maxNonNegative(v int) int {
 		return 0
 	}
 	return v
+}
+
+func (h *AuthHandler) RefreshToken(c *gin.Context) {
+	claimsAny, ok := c.Get(middleware.ContextClaimsKey)
+	if !ok {
+		util.Err(c, http.StatusUnauthorized, "缺少登录信息")
+		return
+	}
+	claims, ok := claimsAny.(*security.Claims)
+	if !ok {
+		util.Err(c, http.StatusUnauthorized, "登录信息无效")
+		return
+	}
+
+	var user model.User
+	if err := h.db.Select("id", "username", "email", "role", "status", "token_version").First(&user, claims.UserID).Error; err != nil {
+		util.Err(c, http.StatusUnauthorized, "用户不存在")
+		return
+	}
+	if strings.ToLower(strings.TrimSpace(user.Status)) != "active" {
+		util.Err(c, http.StatusForbidden, "账号已被禁用")
+		return
+	}
+
+	ttl := 24 * time.Hour
+	if claims.ExpiresAt != nil && claims.IssuedAt != nil {
+		originalTTL := claims.ExpiresAt.Time.Sub(claims.IssuedAt.Time)
+		if originalTTL > 24*time.Hour {
+			ttl = 7 * 24 * time.Hour
+		}
+	}
+
+	token, expiresAt, err := h.jwtMgr.IssueToken(user.ID, user.Username, user.Role, user.TokenVersion, ttl)
+	if err != nil {
+		util.Err(c, http.StatusInternalServerError, "生成登录凭证失败")
+		return
+	}
+	util.OK(c, gin.H{
+		"token":      token,
+		"expires_at": expiresAt,
+		"user": gin.H{
+			"id":       user.ID,
+			"username": user.Username,
+			"email":    user.Email,
+			"role":     user.Role,
+		},
+	})
 }

@@ -55,3 +55,7 @@ export function sendRegisterEmailCode(email: string) {
 export function getCurrentUser() {
   return http.get<never, LoginResult["user"]>("/api/auth/me");
 }
+
+export function refreshToken() {
+  return http.post<never, LoginResult>("/api/auth/refresh");
+}

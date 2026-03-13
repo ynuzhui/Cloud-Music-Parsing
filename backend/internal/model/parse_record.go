@@ -12,5 +12,5 @@ type ParseRecord struct {
 	Quality   string    `gorm:"size:32" json:"quality"`
 	CacheHit  bool      `gorm:"not null;default:false" json:"cache_hit"`
 	Status    string    `gorm:"size:20;not null" json:"status"`
-	CreatedAt time.Time `json:"created_at"`
+	CreatedAt time.Time `gorm:"index" json:"created_at"`
 }

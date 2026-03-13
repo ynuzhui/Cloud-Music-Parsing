@@ -12,5 +12,5 @@ type AuditLog struct {
 	StatusCode  int       `gorm:"index;not null" json:"status_code"`
 	LatencyMS   int64     `gorm:"not null" json:"latency_ms"`
 	RequestBody string    `gorm:"type:text" json:"request_body"`
-	CreatedAt   time.Time `json:"created_at"`
+	CreatedAt   time.Time `gorm:"index" json:"created_at"`
 }

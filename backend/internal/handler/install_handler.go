@@ -2,6 +2,7 @@ package handler
 
 import (
 	"net/http"
+	"sync"
 	"time"
 
 	"go-music-aggregator/backend/internal/middleware"
@@ -16,6 +17,7 @@ type InstallHandler struct {
 	service     *service.InstallService
 	autoRestart bool
 	RestartCh   chan struct{}
+	installMu   sync.Mutex
 }
 
 func NewInstallHandler(state *middleware.InstallState, svc *service.InstallService, autoRestart bool, restartCh chan struct{}) *InstallHandler {
@@ -41,6 +43,9 @@ func (h *InstallHandler) TestConnection(c *gin.Context) {
 }
 
 func (h *InstallHandler) Complete(c *gin.Context) {
+	h.installMu.Lock()
+	defer h.installMu.Unlock()
+
 	if h.state.IsInstalled() {
 		util.Err(c, http.StatusConflict, "系统已安装，禁止重复安装")
 		return
