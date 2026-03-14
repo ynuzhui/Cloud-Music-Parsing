@@ -4,9 +4,11 @@ import { createDiscreteApi } from "naive-ui";
 import { DeviceFloppy } from "@vicons/tabler";
 import { getSettings, saveSettings, type SystemSettings } from "@/api/modules/admin";
 import { clearPublicSiteSettingsCache } from "@/api/modules/site";
+import { useAuthStore } from "@/stores/auth";
 import { useSettingsStore } from "@/stores/settings";
 
 const { message } = createDiscreteApi(["message"]);
+const authStore = useAuthStore();
 const settingsStore = useSettingsStore();
 const loading = ref(false);
 const saving = ref(false);
@@ -73,6 +75,7 @@ const currentPayload = computed(() => ({
 const currentSnapshot = computed(() => JSON.stringify(currentPayload.value));
 const hasNumericInputError = computed(() => numericDraft.dailyLimitInvalid || numericDraft.concurrencyLimitInvalid);
 const hasPendingChanges = computed(() => initialized.value && !loading.value && !hasNumericInputError.value && currentSnapshot.value !== snapshot.value);
+const canEditSensitiveSettings = computed(() => authStore.isSuperAdmin);
 
 function isNonNegativeInteger(value: string): boolean {
   return /^\d+$/.test(value.trim());
@@ -223,8 +226,8 @@ onBeforeUnmount(() => {
 
     <n-spin :show="loading">
       <n-space vertical :size="16" class="settings-stack" :class="{ 'settings-stack--dock': hasPendingChanges }">
-        <n-card title="站点信息" class="setting-card">
-          <n-form label-placement="top" :show-feedback="false">
+        <n-card title="站点信息" class="setting-card" :class="{ 'setting-card--readonly': !canEditSensitiveSettings }">
+          <n-form label-placement="top" :show-feedback="false" :disabled="!canEditSensitiveSettings">
             <n-grid :cols="24" :x-gap="14" :y-gap="8">
               <n-form-item-gi :span="12" label="站点名称">
                 <n-input v-model:value="siteForm.name" size="large" />
@@ -294,8 +297,8 @@ onBeforeUnmount(() => {
           </n-form>
         </n-card>
 
-        <n-card title="验证码设置" class="setting-card">
-          <n-form label-placement="top" :show-feedback="false">
+        <n-card title="验证码设置" class="setting-card" :class="{ 'setting-card--readonly': !canEditSensitiveSettings }">
+          <n-form label-placement="top" :show-feedback="false" :disabled="!canEditSensitiveSettings">
             <n-form-item label="启用验证码">
               <n-switch v-model:value="captchaForm.enabled" />
             </n-form-item>
@@ -364,6 +367,10 @@ onBeforeUnmount(() => {
   border-radius: 16px;
   background: var(--card-bg);
   border: 1px solid rgba(20, 41, 78, 0.08);
+}
+
+.setting-card--readonly {
+  opacity: 0.62;
 }
 
 .field-tip {

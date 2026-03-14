@@ -3,6 +3,7 @@ import { computed, h, onMounted, reactive, ref, watch } from "vue";
 import { createDiscreteApi, type DataTableColumns, NButton, NInput, NSpace, NSwitch, NTag } from "naive-ui";
 import {
   createUser,
+  deleteUser,
   listUserGroups,
   listUsers,
   resetUserPassword,
@@ -14,7 +15,7 @@ import {
 } from "@/api/modules/admin";
 import { useAuthStore } from "@/stores/auth";
 
-const { message } = createDiscreteApi(["message"]);
+const { message, dialog } = createDiscreteApi(["message", "dialog"]);
 const authStore = useAuthStore();
 
 const loading = ref(false);
@@ -250,10 +251,43 @@ function statusTagType(status: UserItem["status"]) {
   return status === "active" ? "success" : "error";
 }
 
+function canManageTargetUser(row: UserItem): boolean {
+  if (row.role !== "super_admin") return true;
+  return authStore.isSuperAdmin;
+}
+
+function renderCenteredCell(text: string) {
+  return h(
+    "div",
+    {
+      style: {
+        width: "100%",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        textAlign: "center",
+      },
+    },
+    text || "-",
+  );
+}
+
 const columns: DataTableColumns<UserItem> = [
   { title: "ID", key: "id", width: 72, align: "center" },
-  { title: "用户名", key: "username", minWidth: 130 },
-  { title: "邮箱", key: "email", minWidth: 180 },
+  {
+    title: "用户名",
+    key: "username",
+    minWidth: 130,
+    align: "center",
+    render: (row) => renderCenteredCell(row.username),
+  },
+  {
+    title: "邮箱",
+    key: "email",
+    minWidth: 180,
+    align: "center",
+    render: (row) => renderCenteredCell(row.email),
+  },
   {
     title: "角色",
     key: "role",
@@ -274,7 +308,8 @@ const columns: DataTableColumns<UserItem> = [
     title: "用户组",
     key: "group_name",
     minWidth: 120,
-    render: (row) => row.group_name || "-",
+    align: "center",
+    render: (row) => renderCenteredCell(row.group_name || "-"),
   },
   {
     title: "配额(日/并发)",
@@ -307,27 +342,63 @@ const columns: DataTableColumns<UserItem> = [
   {
     title: "操作",
     key: "actions",
-    width: 230,
+    width: 240,
     align: "center",
-    render: (row) =>
-      h(NSpace, { size: 6, wrapItem: false, justify: "center" }, {
-        default: () => [
-          h(NButton, { tertiary: true, size: "small", type: "info", onClick: () => openEdit(row) }, { default: () => "编辑" }),
-          authStore.isSuperAdmin && row.role !== "super_admin"
-            ? h(
-                NButton,
-                {
-                  tertiary: true,
-                  size: "small",
-                  type: "primary",
-                  onClick: () => onChangeRole(row, row.role === "admin" ? "user" : "admin"),
-                },
-                { default: () => (row.role === "admin" ? "降为用户" : "设为管理员") },
-              )
-            : null,
-          h(NButton, { tertiary: true, size: "small", onClick: () => openReset(row) }, { default: () => "重置密码" }),
-        ].filter(Boolean),
-      }),
+    render: (row) => {
+      const canManage = canManageTargetUser(row);
+      return h(
+        "div",
+        {
+          style: {
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "center",
+            gap: "6px",
+          },
+        },
+        [
+          h(NSpace, { size: 6, wrapItem: false, justify: "center" }, {
+            default: () =>
+              [
+                h(
+                  NButton,
+                  { tertiary: true, size: "small", type: "info", disabled: !canManage, onClick: () => openEdit(row) },
+                  { default: () => "编辑" },
+                ),
+                authStore.isSuperAdmin && row.role !== "super_admin"
+                  ? h(
+                      NButton,
+                      {
+                        tertiary: true,
+                        size: "small",
+                        type: "primary",
+                        onClick: () => onChangeRole(row, row.role === "admin" ? "user" : "admin"),
+                      },
+                      { default: () => (row.role === "admin" ? "降为用户" : "设为管理员") },
+                    )
+                  : null,
+              ].filter(Boolean),
+          }),
+          h(NSpace, { size: 6, wrapItem: false, justify: "center" }, {
+            default: () =>
+              [
+                row.role !== "super_admin"
+                  ? h(
+                      NButton,
+                      { tertiary: true, size: "small", type: "error", onClick: () => confirmDelete(row) },
+                      { default: () => "删除用户" },
+                    )
+                  : null,
+                h(
+                  NButton,
+                  { tertiary: true, size: "small", disabled: !canManage, onClick: () => openReset(row) },
+                  { default: () => "重置密码" },
+                ),
+              ].filter(Boolean),
+          }),
+        ],
+      );
+    },
   },
 ];
 
@@ -390,6 +461,10 @@ function openCreate() {
 }
 
 function openEdit(row: UserItem) {
+  if (!canManageTargetUser(row)) {
+    message.warning("管理员不可编辑超级管理员信息");
+    return;
+  }
   editForm.id = row.id;
   editForm.username = row.username;
   editForm.email = row.email;
@@ -404,9 +479,38 @@ function openEdit(row: UserItem) {
 }
 
 function openReset(row: UserItem) {
+  if (!canManageTargetUser(row)) {
+    message.warning("管理员不可重置超级管理员密码");
+    return;
+  }
   resetForm.id = row.id;
   resetForm.password = "";
   showReset.value = true;
+}
+
+function confirmDelete(row: UserItem) {
+  dialog.warning({
+    title: "删除用户",
+    content: `确认删除用户「${row.username}」吗？该操作不可恢复。`,
+    positiveText: "删除",
+    negativeText: "取消",
+    onPositiveClick: async () => {
+      await onDeleteUser(row);
+    },
+  });
+}
+
+async function onDeleteUser(row: UserItem) {
+  try {
+    await deleteUser(row.id);
+    message.success("用户已删除");
+    if (rows.value.length === 1 && page.value > 1) {
+      page.value -= 1;
+    }
+    await loadUsers();
+  } catch (error) {
+    message.error((error as Error).message);
+  }
 }
 
 async function onCreate() {
@@ -565,8 +669,7 @@ watch(
       <n-form label-placement="top">
         <n-grid :cols="24" :x-gap="12">
           <n-form-item-gi :span="12" label="用户名">
-            <n-input v-model:value="createForm.username" placeholder="请输入用户名（中文或英文开头）" />
-            <div class="field-tip">仅支持中文或英文开头，可包含数字、下划线和短横线，长度 2-32。</div>
+            <n-input v-model:value="createForm.username" placeholder="仅支持中文和字母开头" />
           </n-form-item-gi>
           <n-form-item-gi :span="12" label="邮箱">
             <n-input v-model:value="createForm.email" placeholder="请输入邮箱地址" />
@@ -621,8 +724,7 @@ watch(
       <n-form label-placement="top">
         <n-grid :cols="24" :x-gap="12">
           <n-form-item-gi :span="12" label="用户名">
-            <n-input v-model:value="editForm.username" placeholder="请输入用户名（中文或英文开头）" />
-            <div class="field-tip">仅支持中文或英文开头，可包含数字、下划线和短横线，长度 2-32。</div>
+            <n-input v-model:value="editForm.username" placeholder="仅支持中文和字母开头" />
           </n-form-item-gi>
           <n-form-item-gi :span="12" label="邮箱">
             <n-input v-model:value="editForm.email" placeholder="请输入邮箱地址" />
@@ -700,11 +802,9 @@ watch(
   border: 1px solid rgba(20, 41, 78, 0.08);
 }
 
-.field-tip {
-  margin-top: 6px;
-  color: var(--text-2);
-  font-size: 12px;
-  line-height: 1.5;
+.table-card :deep(.n-data-table-th),
+.table-card :deep(.n-data-table-td) {
+  vertical-align: middle;
 }
 
 @media (max-width: 760px) {

@@ -359,6 +359,7 @@ func mountInstalledRoutes(runtimeCtx context.Context, router *gin.Engine, cfg co
 		adminRoutes.PATCH("/users/:id/status", userAdminHandler.UpdateUserStatus)
 		adminRoutes.PATCH("/users/:id/role", middleware.SuperAdminOnly(), userAdminHandler.SetUserRole)
 		adminRoutes.POST("/users/:id/reset-password", userAdminHandler.ResetUserPassword)
+		adminRoutes.DELETE("/users/:id", userAdminHandler.DeleteUser)
 
 		adminRoutes.GET("/user-groups", userAdminHandler.ListUserGroups)
 		adminRoutes.POST("/user-groups", middleware.SuperAdminOnly(), userAdminHandler.CreateUserGroup)

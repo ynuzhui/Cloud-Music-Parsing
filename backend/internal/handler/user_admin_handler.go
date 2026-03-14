@@ -393,6 +393,41 @@ func (h *UserAdminHandler) ResetUserPassword(c *gin.Context) {
 	util.OK(c, gin.H{"updated": true})
 }
 
+func (h *UserAdminHandler) DeleteUser(c *gin.Context) {
+	actor, ok := getActorClaims(c)
+	if !ok {
+		util.Err(c, http.StatusUnauthorized, "missing auth claims")
+		return
+	}
+
+	id, err := strconv.Atoi(c.Param("id"))
+	if err != nil || id <= 0 {
+		util.Err(c, http.StatusBadRequest, "invalid user id")
+		return
+	}
+
+	var target model.User
+	if err := h.db.Select("id", "role").First(&target, id).Error; err != nil {
+		util.Err(c, http.StatusNotFound, "user not found")
+		return
+	}
+
+	if target.ID == 1 || target.Role == "super_admin" {
+		util.Err(c, http.StatusBadRequest, "super admin cannot be deleted")
+		return
+	}
+	if target.ID == actor.UserID {
+		util.Err(c, http.StatusBadRequest, "cannot delete current user")
+		return
+	}
+
+	if err := h.db.Delete(&model.User{}, target.ID).Error; err != nil {
+		util.Err(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	util.OK(c, gin.H{"deleted": true})
+}
+
 func (h *UserAdminHandler) ListUserGroups(c *gin.Context) {
 	var groups []model.UserGroup
 	if err := h.db.Order("id asc").Find(&groups).Error; err != nil {

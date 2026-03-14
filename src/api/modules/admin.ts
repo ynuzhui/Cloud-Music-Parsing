@@ -237,6 +237,10 @@ export function resetUserPassword(id: number, password: string) {
   return http.post(`/api/dashboard/users/${id}/reset-password`, { password });
 }
 
+export function deleteUser(id: number) {
+  return http.delete(`/api/dashboard/users/${id}`);
+}
+
 export function listUserGroups() {
   return http.get<never, UserGroupItem[]>("/api/dashboard/user-groups");
 }

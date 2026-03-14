@@ -7,7 +7,7 @@
 </p>
 
 <p align="center">
-  <a href="./LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="MIT License"></a>
+  <a href="./LICENSE"><img src="https://img.shields.io/badge/license-AGPL--3.0-blue.svg" alt="AGPL-3.0 License"></a>
   <img src="https://img.shields.io/badge/Go-1.23-00ADD8?logo=go&logoColor=white" alt="Go 1.23">
   <img src="https://img.shields.io/badge/Vue-3-4FC08D?logo=vuedotjs&logoColor=white" alt="Vue 3">
   <img src="https://img.shields.io/badge/Docker-Ready-2496ED?logo=docker&logoColor=white" alt="Docker Ready">
@@ -18,6 +18,21 @@
 </p>
 
 ---
+
+## Important
+
+### 严肃警告
+
+请务必遵守 GNU Affero General Public License (AGPL-3.0) 许可协议。
+
+在您的修改、演绎、分发或派生项目中，必须同样采用 AGPL-3.0 许可协议，并在适当的位置包含本项目的许可和版权信息。
+
+若您用于售卖或其他盈利用途，必须提供本项目的源代码及原项目链接。另外由于本项目涉及第三方，售卖后可能遭受法律或诉讼风险。如若发现违反许可协议，作者保留追究法律责任的权利。
+
+禁止在二开项目中修改程序原版权信息（您可以添加二开作者信息）。
+
+感谢您的尊重与理解。
+
 
 ## 功能
 
@@ -107,7 +122,7 @@ npm run dev                          # 终端 B
 
 ## 许可证
 
-[MIT](./LICENSE)
+[GNU Affero General Public License v3.0 (AGPL-3.0)](./LICENSE)
 
 ## 免责声明
 

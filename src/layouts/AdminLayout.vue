@@ -28,10 +28,18 @@ const themeLabel = computed(() => {
   return "跟随系统";
 });
 
+const sidebarThemeIcon = computed(() => (settingsStore.theme === "dark" ? Sun : Moon));
+
+const sidebarThemeText = computed(() => (settingsStore.theme === "dark" ? "浅色模式" : "深色模式"));
+
 function cycleTheme() {
   const order = ["light", "dark", "system"] as const;
   const idx = order.indexOf(settingsStore.theme);
   settingsStore.setTheme(order[(idx + 1) % 3]);
+}
+
+function toggleLightDarkTheme() {
+  settingsStore.setTheme(settingsStore.theme === "dark" ? "light" : "dark");
 }
 
 onMounted(async () => {
@@ -146,6 +154,12 @@ function logout() {
                   <n-icon><ExternalLink /></n-icon>
                 </template>
                 访问前台
+              </n-button>
+              <n-button quaternary block class="sider-btn" @click="toggleLightDarkTheme">
+                <template #icon>
+                  <n-icon><component :is="sidebarThemeIcon" /></n-icon>
+                </template>
+                {{ sidebarThemeText }}
               </n-button>
               <n-button quaternary block type="error" class="sider-btn" @click="logout">
                 <template #icon>
@@ -321,7 +335,6 @@ function logout() {
   transform: translateY(8px);
 }
 </style>
-
 
 
 

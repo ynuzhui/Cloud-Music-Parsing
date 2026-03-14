@@ -7,7 +7,7 @@
 </p>
 
 <p align="center">
-  <a href="./LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="MIT License"></a>
+  <a href="./LICENSE"><img src="https://img.shields.io/badge/license-AGPL--3.0-blue.svg" alt="AGPL-3.0 License"></a>
   <img src="https://img.shields.io/badge/Go-1.23-00ADD8?logo=go&logoColor=white" alt="Go 1.23">
   <img src="https://img.shields.io/badge/Vue-3-4FC08D?logo=vuedotjs&logoColor=white" alt="Vue 3">
   <img src="https://img.shields.io/badge/Docker-Ready-2496ED?logo=docker&logoColor=white" alt="Docker Ready">
@@ -18,6 +18,21 @@
 </p>
 
 ---
+
+## Important
+
+### Serious Warning
+
+Please strictly comply with the GNU Affero General Public License (AGPL-3.0).
+
+In any modified, derived, redistributed, or commercialized version of this project, you must also adopt AGPL-3.0 and retain appropriate license and copyright notices from this project.
+
+If you use this project for sales or other commercial purposes, you must provide the complete source code of your project and a link to this original project. This project may involve third-party components; commercial use may carry legal or litigation risks. If any license violation is found, the author reserves the right to pursue legal responsibility.
+
+Modifying the original copyright notice in secondary development is prohibited (you may add your own secondary-author information).
+
+Thank you for your respect and understanding.
+
 
 ## Features
 
@@ -107,7 +122,7 @@ All time and quota calculations use Beijing time (UTC+8).
 
 ## License
 
-[MIT](./LICENSE)
+[GNU Affero General Public License v3.0 (AGPL-3.0)](./LICENSE)
 
 ## Disclaimer
 
