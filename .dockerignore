@@ -1,7 +1,50 @@
+# VCS / IDE
+.git
+.gitignore
+.gitattributes
+.github
+.vscode
+.idea
+.reference
+.DS_Store
+Thumbs.db
+
+# Dependencies / build cache
 node_modules
 dist
+coverage
+.nyc_output
+.cache
+.vite
+*.tsbuildinfo
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Runtime data / temporary files
 data
 backend/data
-.git
+backend/cmd/server/webdist
+tmp
+temp
+tmpdata-*
+logs
 *.log
+*.pid
+
+# Local env / secrets
+.env
+.env.local
+.env.*.local
+
+# Local helper scripts
 *.ps1
+start-dev.ps1
+build-standalone-win.ps1
+
+# Build-irrelevant docs / metadata
+README.md
+README_EN.md
+LICENSE
+docker-compose.yml

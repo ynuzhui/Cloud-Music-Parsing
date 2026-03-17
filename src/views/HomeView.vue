@@ -93,11 +93,19 @@ const footerRecord = ref<{ icpNo: string; policeNo: string }>({
 });
 const hasFooterRecord = computed(() => !!(footerRecord.value.icpNo || footerRecord.value.policeNo));
 const parseRequireLogin = ref(true);
+const parseAutoPlay = ref(true);
+const homePageNoScrollbarClass = "home-page-no-scrollbar";
 const policeRecordLink = computed(() => {
   const no = (footerRecord.value.policeNo || "").trim();
   if (!no) return POLICE_RECORD_BASE_LINK;
   return `${POLICE_RECORD_BASE_LINK}?police=${encodeURIComponent(no)}`;
 });
+
+function setHomePageScrollbarHidden(hidden: boolean) {
+  if (typeof document === "undefined") return;
+  document.documentElement.classList.toggle(homePageNoScrollbarClass, hidden);
+  document.body.classList.toggle(homePageNoScrollbarClass, hidden);
+}
 
 const userMenuOptions = computed(() => {
   const items: Array<{ label: string; key: string }> = [];
@@ -145,6 +153,12 @@ type TimedLyricLine = {
   trans: string;
 };
 
+type RgbColor = {
+  r: number;
+  g: number;
+  b: number;
+};
+
 type LyricCacheEntry = {
   loading: boolean;
   loaded: boolean;
@@ -155,13 +169,13 @@ type LyricCacheEntry = {
 
 type PlayMode = "single" | "list" | "shuffle";
 type DownloadMenuKey = "audio" | "lyric" | "cover";
-type PlayerTransitionPhase =
-  | "opening-hide-card"
-  | "opening-panel"
-  | "opening-shift"
-  | "closing-shift"
-  | "closing-panel"
-  | null;
+type PlayerViewportAnchor = {
+  top: number;
+  bottom: number;
+  left: number;
+  width: number;
+  height: number;
+};
 type PlayerSettingMenuKey =
   | "mode_single"
   | "mode_list"
@@ -192,17 +206,18 @@ const lyricCache = ref<Record<string, LyricCacheEntry>>({});
 const lyricPendingMap = new Map<string, Promise<LyricCacheEntry | null>>();
 const lyricPanelUserScrolling = ref(false);
 const playbackRate = ref(1);
-const compactCardHidden = ref(false);
-const compactCardPlaceholderHeight = ref(0);
 const playerInlineHeight = ref(0);
+const playerInlineTop = ref(0);
+const inlinePlayerPinned = ref(false);
+const playerViewportAnchor = ref<PlayerViewportAnchor | null>(null);
 const playerTransitioning = ref(false);
-const playerTransitionPhase = ref<PlayerTransitionPhase>(null);
 let topLoadingMessage: MessageReactive | null = null;
 let lyricPanelScrollTimer: ReturnType<typeof setTimeout> | null = null;
 let lyricPanelLastTouchY: number | null = null;
-let playerLayoutObserver: ResizeObserver | null = null;
 const playerPanelMotionMs = 280;
-const playerShellShiftMs = 240;
+const defaultPlayerAccent: RgbColor = { r: 37, g: 118, b: 227 };
+const playerAccent = ref<RgbColor>({ ...defaultPlayerAccent });
+let playerAccentToken = 0;
 
 function showTopLoading(content: string) {
   if (topLoadingMessage) topLoadingMessage.destroy();
@@ -220,11 +235,6 @@ function scrollToParseResult() {
   parseResultRef.value.scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
-function clampWindowScroll(top: number): number {
-  const max = Math.max(0, document.documentElement.scrollHeight - window.innerHeight);
-  return Math.max(0, Math.min(top, max));
-}
-
 function wait(ms: number): Promise<void> {
   if (ms <= 0) return Promise.resolve();
   return new Promise((resolve) => {
@@ -232,32 +242,145 @@ function wait(ms: number): Promise<void> {
   });
 }
 
-function getViewportBottomGap(): number {
-  const scrollBottom = window.scrollY + window.innerHeight;
-  return Math.max(0, document.documentElement.scrollHeight - scrollBottom);
+function nextAnimationFrame(): Promise<void> {
+  if (typeof window === "undefined") return Promise.resolve();
+  return new Promise((resolve) => {
+    window.requestAnimationFrame(() => resolve());
+  });
 }
 
-function restoreViewportBottomGap(gap: number) {
-  const target = document.documentElement.scrollHeight - window.innerHeight - Math.max(0, gap);
-  window.scrollTo({ top: clampWindowScroll(target), behavior: "auto" });
+function clampColorChannel(value: number): number {
+  const safe = Number.isFinite(value) ? value : 0;
+  return Math.max(0, Math.min(255, Math.round(safe)));
 }
 
-function captureCompactCardHeight() {
-  const card = parseResultRef.value;
-  if (!card) return;
-  compactCardPlaceholderHeight.value = Math.max(0, Math.ceil(card.getBoundingClientRect().height));
+function blendChannel(from: number, to: number, ratio: number): number {
+  const safeRatio = Math.max(0, Math.min(1, ratio));
+  return clampColorChannel(from + (to - from) * safeRatio);
+}
+
+function rgbToToken(color: RgbColor): string {
+  return `${clampColorChannel(color.r)} ${clampColorChannel(color.g)} ${clampColorChannel(color.b)}`;
+}
+
+function resolveThemeIsDark(): boolean {
+  if (settingsStore.theme === "dark") return true;
+  if (settingsStore.theme === "light") return false;
+  if (typeof window === "undefined" || typeof window.matchMedia !== "function") return false;
+  return window.matchMedia("(prefers-color-scheme: dark)").matches;
+}
+
+function scoreAccentColor(data: Uint8ClampedArray): RgbColor | null {
+  let bestColor: RgbColor | null = null;
+  let bestScore = -1;
+  for (let i = 0; i < data.length; i += 16) {
+    const r = data[i];
+    const g = data[i + 1];
+    const b = data[i + 2];
+    const alpha = data[i + 3];
+    if (alpha < 110) continue;
+    const max = Math.max(r, g, b);
+    const min = Math.min(r, g, b);
+    const saturation = max === 0 ? 0 : (max - min) / max;
+    const luminance = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
+    if (luminance < 0.1 || luminance > 0.94) continue;
+    const score = saturation * 0.72 + (1 - Math.abs(luminance - 0.48)) * 0.28;
+    if (score > bestScore) {
+      bestScore = score;
+      bestColor = { r, g, b };
+    }
+  }
+  return bestColor;
+}
+
+async function decodeImageData(url: string): Promise<ImageData | null> {
+  if (typeof document === "undefined") return null;
+  const canvas = document.createElement("canvas");
+  const size = 54;
+  canvas.width = size;
+  canvas.height = size;
+  const context = canvas.getContext("2d", { willReadFrequently: true });
+  if (!context) return null;
+
+  try {
+    const response = await fetch(url, { mode: "cors", credentials: "omit", cache: "force-cache" });
+    if (!response.ok) return null;
+    const blob = await response.blob();
+    if (typeof createImageBitmap === "function") {
+      const bitmap = await createImageBitmap(blob);
+      context.drawImage(bitmap, 0, 0, size, size);
+      bitmap.close();
+      return context.getImageData(0, 0, size, size);
+    }
+  } catch {
+    // Fallback to Image element when fetch/imageBitmap fails.
+  }
+
+  try {
+    const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+      const node = new Image();
+      node.crossOrigin = "anonymous";
+      node.referrerPolicy = "no-referrer";
+      node.onload = () => resolve(node);
+      node.onerror = () => reject(new Error("image-load-failed"));
+      node.src = url;
+    });
+    context.drawImage(img, 0, 0, size, size);
+    return context.getImageData(0, 0, size, size);
+  } catch {
+    return null;
+  }
+}
+
+async function extractAccentFromCover(url: string): Promise<RgbColor | null> {
+  const normalized = normalizeExternalMediaUrl(url);
+  if (!normalized) return null;
+  const imageData = await decodeImageData(normalized);
+  if (!imageData) return null;
+  const candidate = scoreAccentColor(imageData.data);
+  if (!candidate) return null;
+  return {
+    r: blendChannel(candidate.r, 34, 0.08),
+    g: blendChannel(candidate.g, 44, 0.08),
+    b: blendChannel(candidate.b, 68, 0.08),
+  };
+}
+
+async function refreshPlayerAccent(url: string) {
+  const token = ++playerAccentToken;
+  const fallback = { ...defaultPlayerAccent };
+  const extracted = await extractAccentFromCover(url);
+  if (token !== playerAccentToken) return;
+  playerAccent.value = extracted || fallback;
+}
+
+function clearPlayerViewportAnchor() {
+  playerViewportAnchor.value = null;
+}
+
+async function ensureCompactCardReady(maxTries = 24): Promise<boolean> {
+  for (let i = 0; i < maxTries; i += 1) {
+    await nextTick();
+    if (parseResultRef.value) return true;
+    await wait(16);
+  }
+  return false;
+}
+
+function capturePlayerViewportAnchor() {
+  // Player panel size/alignment now uses fixed metrics, no DOM read needed.
+  clearPlayerViewportAnchor();
 }
 
 function updatePlayerInlineHeight() {
-  const header = homeHeaderRef.value;
-  const resultContainer = resultContainerRef.value;
-  if (!header || !resultContainer) {
-    playerInlineHeight.value = 0;
-    return;
-  }
-  const headerTop = header.getBoundingClientRect().top + window.scrollY;
-  const resultBottom = resultContainer.getBoundingClientRect().bottom + window.scrollY;
-  playerInlineHeight.value = Math.max(0, Math.round(resultBottom - headerTop));
+  // Right panel height is hardcoded via CSS breakpoints; keep script side inert.
+  inlinePlayerPinned.value = false;
+  playerInlineTop.value = 0;
+  playerInlineHeight.value = 0;
+}
+
+function onViewportResize() {
+  updatePlayerInlineHeight();
 }
 
 function requireAuth(): boolean {
@@ -353,7 +476,7 @@ const displaySongArtistLine = computed(() => {
   return `${song} - ${artist}`;
 });
 
-const compactLyricLineHeight = 24;
+const compactLyricLineHeight = 20;
 const compactLyricRows = computed(() => {
   const entry = currentLyricEntry.value;
   const lines = currentTimedLyrics.value.map((line) => line.main || line.trans);
@@ -382,33 +505,32 @@ const compactLyricOffset = computed(() => {
 const compactLyricTrackStyle = computed(() => ({
   transform: `translateY(-${compactLyricOffset.value * compactLyricLineHeight}px)`,
 }));
-const showCompactCard = computed(() => !!parseResult.value && !compactCardHidden.value);
-const showCompactCardPlaceholder = computed(
-  () =>
-    !!parseResult.value &&
-    compactCardHidden.value &&
-    compactCardPlaceholderHeight.value > 0 &&
-    playerTransitionPhase.value === "opening-hide-card",
-);
-const compactCardPlaceholderStyle = computed(() => ({
-  height: `${compactCardPlaceholderHeight.value}px`,
-}));
+const showCompactCard = computed(() => true);
 const homeShellClass = computed(() => ({
   "with-player": showFullPlayer.value && !!parseResult.value,
-  "with-player-opening-panel": playerTransitionPhase.value === "opening-panel",
-  "with-player-opening-shift": playerTransitionPhase.value === "opening-shift",
-  "with-player-closing-shift": playerTransitionPhase.value === "closing-shift",
 }));
-const playerInlinePanelStyle = computed(() => {
-  if (isPlayerFullscreen.value || playerInlineHeight.value <= 0) return undefined;
-  const value = `${playerInlineHeight.value}px`;
+const playerThemeStyle = computed<Record<string, string>>(() => {
+  const accent = playerAccent.value;
+  const isDark = resolveThemeIsDark();
+  const soft = isDark
+    ? { r: blendChannel(accent.r, 42, 0.52), g: blendChannel(accent.g, 44, 0.52), b: blendChannel(accent.b, 52, 0.52) }
+    : { r: blendChannel(accent.r, 255, 0.78), g: blendChannel(accent.g, 255, 0.78), b: blendChannel(accent.b, 255, 0.78) };
+  const deep = isDark
+    ? { r: blendChannel(accent.r, 226, 0.32), g: blendChannel(accent.g, 233, 0.32), b: blendChannel(accent.b, 246, 0.32) }
+    : { r: blendChannel(accent.r, 10, 0.62), g: blendChannel(accent.g, 16, 0.62), b: blendChannel(accent.b, 30, 0.62) };
+  const muted = isDark
+    ? { r: blendChannel(accent.r, 180, 0.56), g: blendChannel(accent.g, 188, 0.56), b: blendChannel(accent.b, 202, 0.56) }
+    : { r: blendChannel(accent.r, 118, 0.48), g: blendChannel(accent.g, 124, 0.48), b: blendChannel(accent.b, 138, 0.48) };
   return {
-    minHeight: value,
-    height: value,
-    maxHeight: value,
+    "--player-accent-rgb": rgbToToken(accent),
+    "--player-accent-soft-rgb": rgbToToken(soft),
+    "--player-accent-deep-rgb": rgbToToken(deep),
+    "--player-accent-muted-rgb": rgbToToken(muted),
   };
 });
-
+const playerPanelStyle = computed(() => {
+  return { ...playerThemeStyle.value };
+});
 const fullModeToggleTitle = computed(() => (fullPlayerMode.value === "lyric" ? "切换唱片模式" : "切换歌词模式"));
 const playModeTitle = computed(() => {
   if (playMode.value === "single") return "单曲循环";
@@ -525,12 +647,53 @@ function setAudioVolume(next: number) {
   }
 }
 
+function onCompactVolumeInput(event: Event) {
+  const target = event.target as HTMLInputElement | null;
+  if (!target) return;
+  const next = Number(target.value);
+  if (!Number.isFinite(next)) return;
+  setAudioVolume(next);
+}
+
 function setPlaybackRate(next: number) {
   const safe = Math.max(0.5, Math.min(2, next));
   playbackRate.value = safe;
   if (audioRef.value) {
     audioRef.value.playbackRate = safe;
   }
+}
+
+function normalizeExternalMediaUrl(raw: string): string {
+  const trimmed = String(raw || "").trim();
+  if (!trimmed) return "";
+  if (trimmed.startsWith("//")) return `https:${trimmed}`;
+  if (/^http:\/\//i.test(trimmed)) return `https://${trimmed.slice(7)}`;
+  return trimmed;
+}
+
+function normalizeParseResultUrls(result: ParseResult): ParseResult {
+  return {
+    ...result,
+    stream_url: normalizeExternalMediaUrl(result.stream_url),
+    cover_url: normalizeExternalMediaUrl(result.cover_url),
+  };
+}
+
+function normalizeSearchSongItemUrls(item: SearchSongItem): SearchSongItem {
+  return {
+    ...item,
+    cover_url: normalizeExternalMediaUrl(item.cover_url),
+  };
+}
+
+function normalizePlaylistInfoUrls(info: PlaylistInfo): PlaylistInfo {
+  return {
+    ...info,
+    tracks: info.tracks.map((track) => ({
+      ...track,
+      cover_url: normalizeExternalMediaUrl(track.cover_url),
+    })),
+  };
 }
 
 function cacheParseResult(result: ParseResult) {
@@ -543,10 +706,10 @@ function getCachedTrack(songId: string): ParseResult | null {
   const key = String(songId || "").trim();
   if (!key) return null;
   const fromParseCache = parseCache.value[key];
-  if (fromParseCache) return fromParseCache;
+  if (fromParseCache) return normalizeParseResultUrls(fromParseCache);
   const numberId = Number(key);
   if (Number.isFinite(numberId) && playlistResults.value[numberId]) {
-    return playlistResults.value[numberId];
+    return normalizeParseResultUrls(playlistResults.value[numberId]);
   }
   return null;
 }
@@ -555,7 +718,7 @@ function loadAudioSource(url: string, autoplay: boolean) {
   const audio = audioRef.value;
   if (!audio) return;
   audio.pause();
-  audio.src = url;
+  audio.src = normalizeExternalMediaUrl(url);
   audio.load();
   resetAudioState();
   audio.volume = volume.value;
@@ -583,24 +746,23 @@ type ActivateTrackOptions = {
 };
 
 async function activateTrack(result: ParseResult, options: ActivateTrackOptions) {
-  parseResult.value = result;
-  cacheParseResult(result);
-  setPlayContext(options.contextType, options.contextIds, options.currentSongId || result.song_id);
+  const normalizedResult = normalizeParseResultUrls(result);
+  parseResult.value = normalizedResult;
+  cacheParseResult(normalizedResult);
+  setPlayContext(options.contextType, options.contextIds, options.currentSongId || normalizedResult.song_id);
   await nextTick();
-  loadAudioSource(result.stream_url, options.autoplay);
+  loadAudioSource(normalizedResult.stream_url, options.autoplay);
   if (options.scroll) {
     scrollToParseResult();
   }
-  void ensureLyricCached(result.song_id);
+  void ensureLyricCached(normalizedResult.song_id);
 }
 
 function clearCurrentTrack() {
   parseResult.value = null;
   playContext.value = { type: "id", ids: [], currentIndex: -1 };
-  compactCardHidden.value = false;
-  compactCardPlaceholderHeight.value = 0;
+  clearPlayerViewportAnchor();
   playerTransitioning.value = false;
-  playerTransitionPhase.value = null;
   showFullPlayer.value = false;
   void exitPlayerFullscreenIfNeeded();
   stopAndResetAudio();
@@ -608,83 +770,48 @@ function clearCurrentTrack() {
 
 async function openFullPlayer() {
   if (!parseResult.value || playerTransitioning.value) return;
-  const keepBottomGap = getViewportBottomGap();
-  captureCompactCardHeight();
+  await ensureCompactCardReady(40);
+  clearPlayerViewportAnchor();
   playerTransitioning.value = true;
-  playerTransitionPhase.value = "opening-hide-card";
-  compactCardHidden.value = true;
-  await nextTick();
-  restoreViewportBottomGap(keepBottomGap);
-  updatePlayerInlineHeight();
-  playerTransitionPhase.value = "opening-panel";
   showFullPlayer.value = true;
   await nextTick();
   updatePlayerInlineHeight();
-  restoreViewportBottomGap(keepBottomGap);
   await wait(playerPanelMotionMs);
-  playerTransitionPhase.value = "opening-shift";
-  await wait(playerShellShiftMs);
-  restoreViewportBottomGap(keepBottomGap);
   playerTransitioning.value = false;
-  playerTransitionPhase.value = null;
-  updatePlayerInlineHeight();
+  await nextTick();
+  await nextAnimationFrame();
+  await nextAnimationFrame();
+  capturePlayerViewportAnchor();
 }
 
 async function closeFullPlayer() {
   if (playerTransitioning.value) return;
-  const keepBottomGap = getViewportBottomGap();
   playerTransitioning.value = true;
-  playerTransitionPhase.value = "closing-shift";
-  await wait(playerShellShiftMs);
-  playerTransitionPhase.value = "closing-panel";
-  await wait(playerPanelMotionMs);
   await exitPlayerFullscreenIfNeeded();
   showFullPlayer.value = false;
-  compactCardHidden.value = false;
+  clearPlayerViewportAnchor();
+  await wait(playerPanelMotionMs);
   await nextTick();
-  restoreViewportBottomGap(keepBottomGap);
   playerTransitioning.value = false;
-  playerTransitionPhase.value = null;
   updatePlayerInlineHeight();
 }
 
-function syncPlayerFullscreenState() {
-  const panel = playerPanelRef.value;
-  const fullscreenEl = document.fullscreenElement;
-  isPlayerFullscreen.value = !!panel && !!fullscreenEl && (fullscreenEl === panel || panel.contains(fullscreenEl));
-}
-
 async function exitPlayerFullscreenIfNeeded() {
-  const panel = playerPanelRef.value;
-  if (!panel) return;
-  const fullscreenEl = document.fullscreenElement;
-  if (!fullscreenEl) {
-    isPlayerFullscreen.value = false;
-    return;
-  }
-  if (fullscreenEl === panel || panel.contains(fullscreenEl)) {
-    try {
-      await document.exitFullscreen();
-    } catch {
-      // Ignore fullscreen exit failures.
-    }
-  }
+  if (!isPlayerFullscreen.value) return;
   isPlayerFullscreen.value = false;
 }
 
 async function togglePlayerFullscreen() {
-  const panel = playerPanelRef.value;
-  if (!panel) return;
-  const fullscreenEl = document.fullscreenElement;
-  try {
-    if (fullscreenEl && (fullscreenEl === panel || panel.contains(fullscreenEl))) {
-      await document.exitFullscreen();
-    } else {
-      await panel.requestFullscreen();
-    }
-  } catch {
-    message.warning("当前环境暂不支持全屏播放");
+  isPlayerFullscreen.value = !isPlayerFullscreen.value;
+  if (!isPlayerFullscreen.value) {
+    await nextTick();
+    updatePlayerInlineHeight();
   }
+}
+
+async function onPlayerFullscreenButtonClick(event: MouseEvent) {
+  event.preventDefault();
+  await togglePlayerFullscreen();
 }
 
 function clearLyricPanelScrollTimer() {
@@ -738,6 +865,41 @@ function onLyricPanelTouchMove(event: TouchEvent) {
 
 function onLyricPanelTouchEnd() {
   lyricPanelLastTouchY = null;
+}
+
+function isEditableKeyboardTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  if (target.isContentEditable) return true;
+  const tagName = target.tagName.toLowerCase();
+  if (tagName === "input" || tagName === "textarea" || tagName === "select") return true;
+  return !!target.closest("input, textarea, select, [contenteditable=''], [contenteditable='true']");
+}
+
+function onHomeKeyboardControl(event: KeyboardEvent) {
+  if (event.defaultPrevented) return;
+  if (event.ctrlKey || event.metaKey || event.altKey) return;
+  if (!parseResult.value) return;
+  if (isEditableKeyboardTarget(event.target)) return;
+
+  const key = event.key;
+  const code = event.code;
+
+  if (code === "Space" || key === " " || key === "Spacebar") {
+    event.preventDefault();
+    togglePlayPause();
+    return;
+  }
+
+  if (key === "ArrowLeft") {
+    event.preventDefault();
+    onPrevTrack();
+    return;
+  }
+
+  if (key === "ArrowRight") {
+    event.preventDefault();
+    onNextTrack();
+  }
 }
 
 function toggleFullPlayerMode() {
@@ -806,12 +968,6 @@ function onSeekInput(event: Event) {
   currentTime.value = next;
 }
 
-function onVolumeInput(event: Event) {
-  const next = Number((event.target as HTMLInputElement).value);
-  if (!Number.isFinite(next)) return;
-  setAudioVolume(next);
-}
-
 function onAudioTimeUpdate() {
   const audio = audioRef.value;
   if (!audio) return;
@@ -867,7 +1023,8 @@ function setLyricLineRef(element: unknown, index: number) {
 }
 
 function scrollLyricLineIntoCenter(index: number, behavior: ScrollBehavior) {
-  if (!showFullPlayer.value || fullPlayerMode.value !== "lyric") return;
+  if (!showFullPlayer.value) return;
+  if (!isPlayerFullscreen.value && fullPlayerMode.value !== "lyric") return;
   if (index < 0) return;
   const lineEl = lyricLineRefs.value[index];
   lineEl?.scrollIntoView({ behavior, block: "center" });
@@ -905,7 +1062,7 @@ async function playContextTrackByIndex(targetIndex: number) {
   switchingTrack.value = true;
   showTopLoading("正在解析上一首/下一首...");
   try {
-    const parsed = await parseMusic(targetSongId, quality.value);
+    const parsed = normalizeParseResultUrls(await parseMusic(targetSongId, quality.value));
     if (ctx.type === "playlist") {
       const numberId = Number(targetSongId);
       if (Number.isFinite(numberId)) {
@@ -974,9 +1131,8 @@ async function onSearch() {
   showTopLoading("正在搜索...");
   hasSearched.value = true;
   searchResults.value = [];
-  clearCurrentTrack();
   try {
-    searchResults.value = await searchSong(keyword, 20);
+    searchResults.value = (await searchSong(keyword, 20)).map(normalizeSearchSongItemUrls);
     settingsStore.addSearchHistory(keyword);
     if (searchResults.value.length === 0) message.info("未找到相关歌曲");
   } catch (error) {
@@ -993,14 +1149,14 @@ async function onParseSong(songId: number) {
   parsing.value = true;
   showTopLoading("正在解析歌曲...");
   try {
-    const result = await parseMusic(String(songId), quality.value);
+    const result = normalizeParseResultUrls(await parseMusic(String(songId), quality.value));
     const contextIds = searchResults.value.map((song) => song.id);
     await activateTrack(result, {
       contextType: "search",
       contextIds,
       currentSongId: String(songId),
-      autoplay: false,
-      scroll: true,
+      autoplay: parseAutoPlay.value,
+      scroll: false,
     });
     message.success("解析成功");
   } catch (error) {
@@ -1022,13 +1178,13 @@ async function onParseById() {
   idParsing.value = true;
   showTopLoading("正在解析歌曲...");
   try {
-    const result = await parseMusic(input, quality.value);
+    const result = normalizeParseResultUrls(await parseMusic(input, quality.value));
     await activateTrack(result, {
       contextType: "id",
       contextIds: [result.song_id],
       currentSongId: result.song_id,
-      autoplay: false,
-      scroll: true,
+      autoplay: parseAutoPlay.value,
+      scroll: false,
     });
     message.success("解析成功");
   } catch (error) {
@@ -1052,7 +1208,7 @@ async function onLoadPlaylist() {
   playlistInfo.value = null;
   playlistResults.value = {};
   try {
-    playlistInfo.value = await fetchPlaylist(input);
+    playlistInfo.value = normalizePlaylistInfoUrls(await fetchPlaylist(input));
     message.success(`歌单已加载：${playlistInfo.value.name}（${playlistInfo.value.tracks.length} 首）`);
   } catch (error) {
     message.error((error as Error).message);
@@ -1068,15 +1224,15 @@ async function onParseTrack(trackId: number) {
   playlistParsing.value[trackId] = true;
   showTopLoading("正在解析歌曲...");
   try {
-    const result = await parseMusic(String(trackId), quality.value);
+    const result = normalizeParseResultUrls(await parseMusic(String(trackId), quality.value));
     playlistResults.value[trackId] = result;
     const contextIds = playlistInfo.value?.tracks?.map((track) => track.id) || [trackId];
     await activateTrack(result, {
       contextType: "playlist",
       contextIds,
       currentSongId: String(trackId),
-      autoplay: false,
-      scroll: true,
+      autoplay: parseAutoPlay.value,
+      scroll: false,
     });
     message.success("解析成功");
   } catch (error) {
@@ -1094,7 +1250,7 @@ async function playTrack(result: ParseResult) {
     contextIds,
     currentSongId: result.song_id,
     autoplay: true,
-    scroll: true,
+    scroll: false,
   });
 }
 
@@ -1294,7 +1450,7 @@ async function ensureLyricCached(songId: string): Promise<LyricCacheEntry | null
 }
 
 async function safeFetchCover(coverUrl: string): Promise<{ buffer: ArrayBuffer; mime: string } | null> {
-  const url = (coverUrl || "").trim();
+  const url = normalizeExternalMediaUrl(coverUrl);
   if (!url) return null;
   try {
     const resp = await fetch(url);
@@ -1550,6 +1706,7 @@ async function onDownloadCurrent() {
   startDownloadProgress("audio");
   try {
     const current = parseResult.value;
+    const streamUrl = normalizeExternalMediaUrl(current.stream_url);
     const songName = current.song_name || `歌曲 ${current.song_id}`;
     const artistName = current.artist_name || "未知歌手";
     const albumName = current.album_name || "未知专辑";
@@ -1559,7 +1716,7 @@ async function onDownloadCurrent() {
     const trackTotal = Number.isFinite(current.track_total) ? Number(current.track_total) : 0;
     const discNumber = Number.isFinite(current.disc_number) ? Number(current.disc_number) : 0;
 
-    const audioResp = await fetch(current.stream_url);
+    const audioResp = await fetch(streamUrl);
     if (!audioResp.ok) throw new Error(`下载音频失败（HTTP ${audioResp.status}）`);
     const { buffer: originalBuffer, totalBytes } = await readResponseArrayBufferWithProgress(audioResp, updateDownloadProgressState);
     if (totalBytes) {
@@ -1567,7 +1724,7 @@ async function onDownloadCurrent() {
     } else {
       updateDownloadProgressState(originalBuffer.byteLength, null);
     }
-    const format = detectAudioFormat(originalBuffer, current.stream_url, audioResp.headers.get("content-type") || "");
+    const format = detectAudioFormat(originalBuffer, streamUrl, audioResp.headers.get("content-type") || "");
 
     let finalBlob = new Blob([originalBuffer], { type: format === "flac" ? "audio/flac" : "audio/mpeg" });
     let lyricResult: LyricResult | null = null;
@@ -1729,7 +1886,7 @@ watch(
     lyricLineRefs.value = [];
     if (!songId) {
       showFullPlayer.value = false;
-      compactCardHidden.value = false;
+      clearPlayerViewportAnchor();
       return;
     }
     void ensureLyricCached(songId);
@@ -1737,17 +1894,23 @@ watch(
 );
 
 watch(
-  [() => currentLyricIndex.value, () => showFullPlayer.value, () => fullPlayerMode.value, () => currentTimedLyrics.value.length],
-  () => {
-    if (!showFullPlayer.value || fullPlayerMode.value !== "lyric") return;
-    if (lyricPanelUserScrolling.value) return;
-    const index = currentLyricIndex.value;
-    if (index < 0) return;
-    void nextTick(() => {
-      scrollLyricLineIntoCenter(index, isPlaying.value ? "smooth" : "auto");
-    });
+  () => parseResult.value?.cover_url || "",
+  (coverUrl) => {
+    void refreshPlayerAccent(coverUrl);
   },
+  { immediate: true },
 );
+
+watch([() => currentLyricIndex.value, () => showFullPlayer.value, () => currentTimedLyrics.value.length, () => fullPlayerMode.value, () => isPlayerFullscreen.value], () => {
+  if (!showFullPlayer.value) return;
+  if (!isPlayerFullscreen.value && fullPlayerMode.value !== "lyric") return;
+  if (lyricPanelUserScrolling.value) return;
+  const index = currentLyricIndex.value;
+  if (index < 0) return;
+  void nextTick(() => {
+    scrollLyricLineIntoCenter(index, isPlaying.value ? "smooth" : "auto");
+  });
+});
 
 watch(
   () => showFullPlayer.value,
@@ -1756,9 +1919,20 @@ watch(
       updatePlayerInlineHeight();
     });
     if (!visible) {
+      clearPlayerViewportAnchor();
       stopLyricPanelUserScrolling();
       void exitPlayerFullscreenIfNeeded();
     }
+  },
+);
+
+watch(
+  () => isPlayerFullscreen.value,
+  (fullscreen) => {
+    if (!showFullPlayer.value || fullscreen) return;
+    void nextTick(() => {
+      updatePlayerInlineHeight();
+    });
   },
 );
 
@@ -1772,29 +1946,21 @@ watch(
 );
 
 onMounted(async () => {
-  document.addEventListener("fullscreenchange", syncPlayerFullscreenState);
-  window.addEventListener("resize", updatePlayerInlineHeight, { passive: true });
+  window.addEventListener("resize", onViewportResize, { passive: true });
+  window.addEventListener("scroll", onViewportResize, { passive: true });
+  window.addEventListener("keydown", onHomeKeyboardControl);
+  setHomePageScrollbarHidden(true);
   setAudioVolume(0.8);
   setPlaybackRate(1);
   await nextTick();
-  updatePlayerInlineHeight();
-  if (typeof ResizeObserver !== "undefined") {
-    playerLayoutObserver = new ResizeObserver(() => {
-      updatePlayerInlineHeight();
-    });
-    if (homeHeaderRef.value) {
-      playerLayoutObserver.observe(homeHeaderRef.value);
-    }
-    if (resultContainerRef.value) {
-      playerLayoutObserver.observe(resultContainerRef.value);
-    }
-  }
+  onViewportResize();
   try {
     const site = await getPublicSiteSettings();
     settingsStore.syncSiteName(site?.name);
     footerRecord.value.icpNo = (site?.icp_no || "").trim();
     footerRecord.value.policeNo = (site?.police_no || "").trim();
     parseRequireLogin.value = site?.parse_require_login !== false;
+    parseAutoPlay.value = site?.parse_auto_play !== false;
     settingsStore.applyDocumentTitle();
   } catch {
     // ignore
@@ -1802,10 +1968,10 @@ onMounted(async () => {
 });
 
 onUnmounted(() => {
-  document.removeEventListener("fullscreenchange", syncPlayerFullscreenState);
-  window.removeEventListener("resize", updatePlayerInlineHeight);
-  playerLayoutObserver?.disconnect();
-  playerLayoutObserver = null;
+  window.removeEventListener("resize", onViewportResize);
+  window.removeEventListener("scroll", onViewportResize);
+  window.removeEventListener("keydown", onHomeKeyboardControl);
+  setHomePageScrollbarHidden(false);
   clearLyricPanelScrollTimer();
   clearDownloadProgressResetTimer();
   void exitPlayerFullscreenIfNeeded();
@@ -1817,11 +1983,23 @@ onUnmounted(() => {
 <template>
     <main class="page-shell home-shell" :class="homeShellClass">
       <section class="home-center">
+        <div class="player-align-zone">
         <header ref="homeHeaderRef" class="home-header glass-card">
-          <div class="header-text">
-            <p class="eyebrow">MUSIC PARSER</p>
-            <h1>{{ settingsStore.siteName }}</h1>
-            <p class="header-desc">支持网易云音乐全品质解析，浏览器端完成下载与元数据写入。</p>
+          <div class="header-main">
+            <div class="top-search-row">
+              <template v-if="activeTab === 'song'">
+                <n-input class="query-input top-query-input" v-model:value="songKeyword" placeholder="输入歌曲名称搜索" size="large" clearable @keydown.enter="onSearch" />
+                <n-button class="query-submit-btn top-query-submit-btn" type="primary" size="large" :disabled="searching" @click="onSearch">搜索</n-button>
+              </template>
+              <template v-else-if="activeTab === 'id'">
+                <n-input class="query-input top-query-input" v-model:value="idInput" placeholder="输入歌曲 ID 或分享链接" size="large" clearable @keydown.enter="onParseById" />
+                <n-button class="query-submit-btn top-query-submit-btn" type="primary" size="large" :disabled="idParsing" @click="onParseById">立即解析</n-button>
+              </template>
+              <template v-else>
+                <n-input class="query-input top-query-input" v-model:value="playlistId" placeholder="输入歌单 ID 或分享链接" size="large" clearable @keydown.enter="onLoadPlaylist" />
+                <n-button class="query-submit-btn top-query-submit-btn" type="primary" size="large" :disabled="loadingPlaylist" @click="onLoadPlaylist">加载歌单</n-button>
+              </template>
+            </div>
           </div>
           <div class="header-actions">
             <button v-if="!authStore.isAuthed" class="settings-btn" title="登录" @click="router.push('/login')">
@@ -1839,7 +2017,21 @@ onUnmounted(() => {
         </header>
 
         <div class="method-card glass-card">
-          <div class="card-title"><n-icon size="16" color="var(--brand)"><Headphones /></n-icon><span>解析方式</span></div>
+          <div class="method-head">
+            <div class="card-title"><n-icon size="16" color="var(--brand)"><Headphones /></n-icon><span>解析方式</span></div>
+            <div class="method-quality-wrap">
+              <span class="method-quality-label">音质</span>
+              <div class="method-quality-value">
+                <n-select
+                  v-model:value="quality"
+                  class="method-quality-nselect"
+                  :options="qualityOptions"
+                  :menu-props="{ class: 'method-quality-menu' }"
+                  :consistent-menu-width="false"
+                />
+              </div>
+            </div>
+          </div>
           <div class="method-options">
             <label class="method-option" :class="{ active: activeTab === 'song' }"><input v-model="activeTab" type="radio" value="song" /><span>搜索解析</span></label>
             <label class="method-option" :class="{ active: activeTab === 'id' }"><input v-model="activeTab" type="radio" value="id" /><span>ID/链接解析</span></label>
@@ -1847,79 +2039,11 @@ onUnmounted(() => {
           </div>
         </div>
 
-        <div class="quality-card glass-card">
-          <div class="card-title"><n-icon size="16" color="var(--brand)"><Headphones /></n-icon><span>音质选择</span></div>
-          <div class="quality-tags">
-            <button v-for="opt in qualityOptions" :key="opt.value" :class="['quality-tag', { active: quality === opt.value }]" @click="quality = opt.value">{{ opt.short }}</button>
-          </div>
-        </div>
-
-        <div ref="resultContainerRef" class="main-card glass-card">
-          <template v-if="activeTab === 'song'">
-            <div class="form-zone">
-              <div class="query-row">
-                <n-input class="query-input" v-model:value="songKeyword" placeholder="输入歌曲名称搜索" size="large" clearable @keydown.enter="onSearch" />
-                <n-button class="query-submit-btn" type="primary" size="large" :disabled="searching" @click="onSearch" style="width: 100px">搜索</n-button>
-              </div>
-            </div>
-            <div v-if="hasSearched" class="song-list-wrap">
-              <n-empty v-if="!searching && searchResults.length === 0" description="暂无搜索结果" />
-              <div v-else-if="searchResults.length > 0" class="song-list">
-                <div v-for="song in searchResults" :key="song.id" class="song-item" @click="onParseSong(song.id)">
-                  <img v-if="song.cover_url" :src="song.cover_url" class="cover" alt="cover" referrerpolicy="no-referrer" />
-                  <div v-else class="cover cover-empty"><n-icon size="18"><Music /></n-icon></div>
-                  <div class="song-info"><span class="song-name">{{ song.name }}</span><span class="song-meta">{{ song.artists.join(" / ") }} · {{ song.album }}</span></div>
-                  <n-button size="small" type="primary" :disabled="parsing" @click.stop="onParseSong(song.id)">解析</n-button>
-                </div>
-              </div>
-            </div>
-          </template>
-
-          <template v-if="activeTab === 'id'">
-            <div class="form-zone">
-              <div class="query-row">
-                <n-input class="query-input" v-model:value="idInput" placeholder="输入歌曲 ID 或分享链接" size="large" clearable @keydown.enter="onParseById" />
-                <n-button class="query-submit-btn" type="primary" size="large" :disabled="idParsing" @click="onParseById" style="width: 120px">立即解析</n-button>
-              </div>
-            </div>
-          </template>
-
-          <template v-if="activeTab === 'playlist'">
-            <div class="form-zone">
-              <div class="query-row">
-                <n-input class="query-input" v-model:value="playlistId" placeholder="输入歌单 ID 或分享链接" size="large" clearable @keydown.enter="onLoadPlaylist" />
-                <n-button class="query-submit-btn" type="primary" size="large" :disabled="loadingPlaylist" @click="onLoadPlaylist" style="width: 120px">加载歌单</n-button>
-              </div>
-            </div>
-            <div v-if="playlistInfo" class="song-list-wrap">
-              <div class="playlist-header"><strong>{{ playlistInfo.name }}</strong><n-tag size="small">共 {{ playlistInfo.tracks.length }} 首</n-tag></div>
-              <div class="song-list">
-                <div v-for="(track, idx) in playlistInfo.tracks" :key="track.id" class="song-item">
-                  <span class="song-index">{{ idx + 1 }}</span>
-                  <img v-if="track.cover_url" :src="track.cover_url" class="cover cover-sm" alt="cover" referrerpolicy="no-referrer" />
-                  <div v-else class="cover cover-empty cover-sm"><n-icon size="14"><Music /></n-icon></div>
-                  <div class="song-info"><span class="song-name">{{ track.name }}</span><span class="song-meta">{{ track.artists.join(" / ") }} · {{ track.album }}</span></div>
-                  <n-button v-if="playlistResults[track.id]" size="small" type="success" @click="playTrack(playlistResults[track.id])">播放</n-button>
-                  <n-button v-else size="small" type="primary" :disabled="!!playlistParsing[track.id]" @click="onParseTrack(track.id)">解析</n-button>
-                </div>
-              </div>
-            </div>
-          </template>
-
-        </div>
-
         <transition name="fade-up">
           <div
             v-if="showCompactCard"
             ref="parseResultRef"
-            :class="[
-              'result-card',
-              'glass-card',
-              {
-                'result-card-hidden': compactCardHidden,
-                'result-card-closing': playerTransitionPhase === 'closing-panel',
-              },
-            ]"
+            :class="['result-card', 'glass-card']"
           >
             <div class="compact-player">
               <div class="compact-cover-stack">
@@ -1955,9 +2079,17 @@ onUnmounted(() => {
                       <input class="range-input range-progress" type="range" min="0" :max="seekMax" step="0.1" :value="seekValue" @input="onSeekInput" />
                       <span class="time-text">{{ durationText }}</span>
                     </div>
-                    <div class="volume-wrap">
-                      <n-icon size="21"><Volume3 /></n-icon>
-                      <input class="range-input range-volume" type="range" min="0" max="1" step="0.01" :value="volume" @input="onVolumeInput" />
+                    <div class="compact-volume">
+                      <n-icon size="22" class="compact-volume-icon"><Volume3 /></n-icon>
+                      <input
+                        class="range-input range-volume"
+                        type="range"
+                        min="0"
+                        max="1"
+                        step="0.01"
+                        :value="volume"
+                        @input="onCompactVolumeInput"
+                      />
                     </div>
                     <n-dropdown :options="downloadMenuOptions" trigger="click" :disabled="isDownloadBusy" @select="onDownloadMenuSelect">
                       <button class="icon-btn download-btn" type="button" :disabled="isDownloadBusy" :title="downloadButtonTitle">
@@ -1980,11 +2112,228 @@ onUnmounted(() => {
             </div>
           </div>
         </transition>
-        <div
-          v-if="showCompactCardPlaceholder"
-          class="result-card-placeholder"
-          :style="compactCardPlaceholderStyle"
-        ></div>
+
+        <div ref="resultContainerRef" class="main-card glass-card">
+          <template v-if="activeTab === 'song'">
+            <div class="song-list-wrap">
+              <div v-if="searchResults.length > 0" class="song-list">
+                <div v-for="song in searchResults" :key="song.id" class="song-item song-item-search" @click="onParseSong(song.id)">
+                  <img v-if="song.cover_url" :src="song.cover_url" class="cover" alt="cover" referrerpolicy="no-referrer" />
+                  <div v-else class="cover cover-empty"><n-icon size="18"><Music /></n-icon></div>
+                  <div class="song-info"><span class="song-name">{{ song.name }}</span><span class="song-meta">{{ song.artists.join(" / ") }} · {{ song.album }}</span></div>
+                </div>
+              </div>
+              <div v-else class="song-list song-list-empty">
+                <n-empty :description="searching ? '正在搜索...' : (hasSearched ? '暂无搜索结果' : '请输入关键词后点击搜索')" />
+              </div>
+            </div>
+          </template>
+
+          <template v-if="activeTab === 'id'">
+            <div class="song-list song-list-empty">
+              <n-empty description="请在顶部输入歌曲 ID 或链接并点击解析" />
+            </div>
+          </template>
+
+          <template v-if="activeTab === 'playlist'">
+            <div v-if="playlistInfo" class="song-list-wrap">
+              <div class="playlist-header"><strong>{{ playlistInfo.name }}</strong><n-tag size="small">共 {{ playlistInfo.tracks.length }} 首</n-tag></div>
+              <div class="song-list">
+                <div v-for="(track, idx) in playlistInfo.tracks" :key="track.id" class="song-item">
+                  <span class="song-index">{{ idx + 1 }}</span>
+                  <img v-if="track.cover_url" :src="track.cover_url" class="cover cover-sm" alt="cover" referrerpolicy="no-referrer" />
+                  <div v-else class="cover cover-empty cover-sm"><n-icon size="14"><Music /></n-icon></div>
+                  <div class="song-info"><span class="song-name">{{ track.name }}</span><span class="song-meta">{{ track.artists.join(" / ") }} · {{ track.album }}</span></div>
+                  <n-button v-if="playlistResults[track.id]" size="small" type="success" @click="playTrack(playlistResults[track.id])">播放</n-button>
+                  <n-button v-else size="small" type="primary" :disabled="!!playlistParsing[track.id]" @click="onParseTrack(track.id)">解析</n-button>
+                </div>
+              </div>
+            </div>
+            <div v-else class="song-list song-list-empty">
+              <n-empty description="请在顶部输入歌单 ID 或链接并加载歌单" />
+            </div>
+          </template>
+
+        </div>
+
+        <transition name="player-inline">
+          <aside
+            v-if="showFullPlayer && parseResult"
+            ref="playerPanelRef"
+            class="player-panel player-panel-inline glass-card"
+            :class="{
+              'is-player-fullscreen': isPlayerFullscreen,
+            }"
+            :style="playerPanelStyle"
+          >
+            <header class="player-panel-header">
+              <div class="panel-header-actions">
+                <button class="icon-btn panel-mode-btn panel-top-btn" type="button" :title="isPlayerFullscreen ? '退出全屏播放器' : '全屏播放器'" @click="onPlayerFullscreenButtonClick">
+                  <n-icon size="19">
+                    <Minimize v-if="isPlayerFullscreen" />
+                    <Maximize v-else />
+                  </n-icon>
+                </button>
+                <button v-if="!isPlayerFullscreen" class="icon-btn panel-mode-btn panel-close-arrow" type="button" title="收起播放器" @click="closeFullPlayer">
+                  <span class="panel-close-arrow-symbol">›</span>
+                </button>
+              </div>
+            </header>
+            <template v-if="isPlayerFullscreen">
+              <div class="full-player">
+                <div class="player-content">
+                  <section class="content-left">
+                    <div class="player-cover fullscreen-cover-wrap">
+                      <img v-if="parseResult.cover_url" :src="parseResult.cover_url" alt="cover" referrerpolicy="no-referrer" class="fullscreen-cover" />
+                      <div v-else class="fullscreen-cover fullscreen-cover-fallback"><n-icon size="58"><Music /></n-icon></div>
+                    </div>
+                    <div class="player-data fullscreen-meta">
+                      <p class="fullscreen-meta-song">{{ displaySongName }}</p>
+                      <p class="fullscreen-meta-artist">{{ displayArtistName }}</p>
+                      <p class="fullscreen-meta-album">{{ displayAlbumName }}</p>
+                      <div class="fullscreen-meta-tags">
+                        <span class="fullscreen-meta-tag">{{ displayQualityLabel || "标准" }}</span>
+                        <span class="fullscreen-meta-tag">LRC</span>
+                      </div>
+                    </div>
+                  </section>
+                  <section
+                    ref="lyricPanelRef"
+                    class="panel-lyrics fullscreen-lyrics content-right"
+                    @wheel.prevent.stop="onLyricPanelWheel"
+                    @touchstart.stop="onLyricPanelTouchStart"
+                    @touchmove.prevent.stop="onLyricPanelTouchMove"
+                    @touchend.stop="onLyricPanelTouchEnd"
+                    @touchcancel.stop="onLyricPanelTouchEnd"
+                  >
+                    <p v-if="currentLyricEntry?.loading" class="lyric-placeholder">歌词加载中...</p>
+                    <p v-else-if="currentTimedLyrics.length === 0" class="lyric-placeholder">暂无滚动歌词</p>
+                    <div v-else class="lyric-scroll-container fullscreen-lyric-scroll">
+                      <div class="placeholder"></div>
+                      <div
+                        v-for="(line, index) in currentTimedLyrics"
+                        :key="`${line.time}-${index}`"
+                        :ref="(el) => setLyricLineRef(el, index)"
+                        class="lrc-line fullscreen-lrc-line"
+                        :class="{ on: index === currentLyricIndex }"
+                        @click="onLyricRowClick(line, index)"
+                      >
+                        <span class="content">{{ line.main || line.trans }}</span>
+                        <span v-if="line.trans" class="tran">{{ line.trans }}</span>
+                      </div>
+                      <div class="placeholder placeholder-bottom"></div>
+                    </div>
+                  </section>
+                </div>
+              </div>
+            </template>
+            <template v-else>
+              <div class="player-headline">
+                <p class="panel-song">{{ displaySongName }}</p>
+                <p class="panel-artist">{{ displayArtistName }}</p>
+              </div>
+              <transition name="player-mode-fade" mode="out-in">
+                <div
+                  v-if="fullPlayerMode === 'lyric'"
+                  key="lyric"
+                  ref="lyricPanelRef"
+                  class="panel-lyrics"
+                  @wheel.prevent.stop="onLyricPanelWheel"
+                  @touchstart.stop="onLyricPanelTouchStart"
+                  @touchmove.prevent.stop="onLyricPanelTouchMove"
+                  @touchend.stop="onLyricPanelTouchEnd"
+                  @touchcancel.stop="onLyricPanelTouchEnd"
+                >
+                  <p v-if="currentLyricEntry?.loading" class="lyric-placeholder">歌词加载中...</p>
+                  <p v-else-if="currentTimedLyrics.length === 0" class="lyric-placeholder">暂无滚动歌词</p>
+                  <div v-else class="lyric-line-list">
+                    <div
+                      v-for="(line, index) in currentTimedLyrics"
+                      :key="`${line.time}-${index}`"
+                      :ref="(el) => setLyricLineRef(el, index)"
+                      class="lyric-row"
+                      :class="{ active: index === currentLyricIndex }"
+                      @click="onLyricRowClick(line, index)"
+                    >
+                      <p class="lyric-main-text">{{ line.main || line.trans }}</p>
+                      <p v-if="line.trans" class="lyric-translation">{{ line.trans }}</p>
+                    </div>
+                  </div>
+                </div>
+                <div v-else key="disc" class="disc-stage">
+                  <div class="disc-record" :class="{ spinning: isPlaying }">
+                    <div class="disc-record-rings"></div>
+                    <img v-if="parseResult.cover_url" :src="parseResult.cover_url" alt="cover" referrerpolicy="no-referrer" class="disc-record-cover" />
+                    <div v-else class="disc-record-cover disc-record-fallback"><n-icon size="38"><Music /></n-icon></div>
+                  </div>
+                </div>
+              </transition>
+            </template>
+            <div class="panel-progress" :class="{ 'fullscreen-progress': isPlayerFullscreen }">
+              <span class="time-text">{{ elapsedText }}</span>
+              <input class="range-input range-progress" type="range" min="0" :max="seekMax" step="0.1" :value="seekValue" @input="onSeekInput" />
+              <span class="time-text">{{ durationText }}</span>
+            </div>
+            <div v-if="isPlayerFullscreen" class="panel-controls-fullscreen">
+              <div class="panel-tools-left"></div>
+              <div class="panel-controls-center">
+                <button class="icon-btn panel-mode-btn player-mode-switch" type="button" :title="fullModeToggleTitle" @click="toggleFullPlayerMode">
+                  <n-icon size="19">
+                    <Vinyl v-if="fullPlayerMode === 'lyric'" />
+                    <Music v-else />
+                  </n-icon>
+                </button>
+                <button class="icon-btn" type="button" :disabled="!hasPrevTrack || switchingTrack" @click="onPrevTrack"><n-icon size="20"><PlayerTrackPrev /></n-icon></button>
+                <button class="icon-btn panel-play-main" type="button" @click="togglePlayPause">
+                  <n-icon size="24"><PlayerPause v-if="isPlaying" /><PlayerPlay v-else /></n-icon>
+                </button>
+                <button class="icon-btn" type="button" :disabled="!hasNextTrack || switchingTrack" @click="onNextTrack"><n-icon size="20"><PlayerTrackNext /></n-icon></button>
+                <button class="icon-btn panel-mode-btn" type="button" :title="playModeTitle" @click="cyclePlayMode">
+                  <n-icon size="19">
+                    <RepeatOnce v-if="isSingleMode" />
+                    <ArrowsShuffle2 v-else-if="isShuffleMode" />
+                    <Repeat v-else />
+                  </n-icon>
+                </button>
+              </div>
+              <div class="panel-tools-right">
+                <label class="quality-select-wrap">
+                  <span class="quality-select-label">音质</span>
+                  <select v-model="quality" class="quality-select-inline">
+                    <option v-for="opt in qualityOptions" :key="opt.value" :value="opt.value">{{ opt.short }}</option>
+                  </select>
+                </label>
+                <n-dropdown :options="playerSettingsMenuOptions" trigger="click" @select="onPlayerSettingSelect">
+                  <button class="icon-btn panel-mode-btn" type="button" title="播放设置">
+                    <n-icon size="19"><Settings /></n-icon>
+                  </button>
+                </n-dropdown>
+              </div>
+            </div>
+            <div v-else class="panel-controls">
+              <button class="icon-btn panel-mode-btn player-mode-switch" type="button" :title="fullModeToggleTitle" @click="toggleFullPlayerMode">
+                <n-icon size="19">
+                  <Vinyl v-if="fullPlayerMode === 'lyric'" />
+                  <Music v-else />
+                </n-icon>
+              </button>
+              <button class="icon-btn" type="button" :disabled="!hasPrevTrack || switchingTrack" @click="onPrevTrack"><n-icon size="20"><PlayerTrackPrev /></n-icon></button>
+              <button class="icon-btn panel-play-main" type="button" @click="togglePlayPause">
+                <n-icon size="24"><PlayerPause v-if="isPlaying" /><PlayerPlay v-else /></n-icon>
+              </button>
+              <button class="icon-btn" type="button" :disabled="!hasNextTrack || switchingTrack" @click="onNextTrack"><n-icon size="20"><PlayerTrackNext /></n-icon></button>
+              <button class="icon-btn panel-mode-btn" type="button" :title="playModeTitle" @click="cyclePlayMode">
+                <n-icon size="19">
+                  <RepeatOnce v-if="isSingleMode" />
+                  <ArrowsShuffle2 v-else-if="isShuffleMode" />
+                  <Repeat v-else />
+                </n-icon>
+              </button>
+            </div>
+          </aside>
+        </transition>
+        </div>
+
         <audio
           ref="audioRef"
           class="native-audio"
@@ -1997,187 +2346,19 @@ onUnmounted(() => {
           @ended="onAudioEnded"
         />
         <footer class="home-footer">
+          <div v-if="hasFooterRecord" class="record-row">
+            <a v-if="footerRecord.icpNo" class="record-link" :href="ICP_RECORD_LINK" target="_blank" rel="noopener noreferrer">{{ footerRecord.icpNo }}</a>
+            <span v-if="footerRecord.icpNo && footerRecord.policeNo" class="record-sep">|</span>
+            <a v-if="footerRecord.policeNo" class="record-link" :href="policeRecordLink" target="_blank" rel="noopener noreferrer">{{ footerRecord.policeNo }}</a>
+          </div>
           <span class="home-footer-main">
             <span>仅供学习交流使用 · 请支持正版音乐</span>
             <span class="footer-sep">|</span>
             <span>Copyright © 2026</span>
             <a class="footer-author-link" href="https://yunzhui.top" target="_blank" rel="noopener noreferrer">云坠</a>
           </span>
-          <div v-if="hasFooterRecord" class="record-row">
-            <a v-if="footerRecord.icpNo" class="record-link" :href="ICP_RECORD_LINK" target="_blank" rel="noopener noreferrer">{{ footerRecord.icpNo }}</a>
-            <span v-if="footerRecord.icpNo && footerRecord.policeNo" class="record-sep">|</span>
-            <a v-if="footerRecord.policeNo" class="record-link" :href="policeRecordLink" target="_blank" rel="noopener noreferrer">{{ footerRecord.policeNo }}</a>
-          </div>
         </footer>
       </section>
-
-      <transition name="player-inline">
-        <aside
-          v-if="showFullPlayer && parseResult"
-          ref="playerPanelRef"
-          class="player-panel player-panel-inline glass-card"
-          :class="{
-            'is-player-fullscreen': isPlayerFullscreen,
-            'player-panel-opening': playerTransitionPhase === 'opening-panel',
-            'player-panel-closing': playerTransitionPhase === 'closing-panel',
-          }"
-          :style="playerInlinePanelStyle"
-        >
-          <header class="player-panel-header">
-            <button class="panel-top-btn" type="button" title="全屏播放器" @click="togglePlayerFullscreen">
-              <n-icon size="18"><Minimize v-if="isPlayerFullscreen" /><Maximize v-else /></n-icon>
-            </button>
-            <button class="panel-close-arrow" type="button" title="关闭播放器" @click="closeFullPlayer">›</button>
-          </header>
-          <template v-if="isPlayerFullscreen">
-            <div class="player-fullscreen-body">
-              <section class="player-fullscreen-left">
-                <div v-if="fullPlayerMode === 'disc'" class="disc-stage fullscreen-disc-stage">
-                  <div class="disc-needle" :class="{ engaged: isPlaying }">
-                    <span class="needle-arm"></span>
-                    <span class="needle-head"></span>
-                  </div>
-                  <div class="disc-record" :class="{ spinning: isPlaying }">
-                    <div class="disc-record-rings"></div>
-                    <img v-if="parseResult.cover_url" :src="parseResult.cover_url" alt="cover" referrerpolicy="no-referrer" class="disc-record-cover" />
-                    <div v-else class="disc-record-cover disc-record-fallback"><n-icon size="38"><Music /></n-icon></div>
-                  </div>
-                </div>
-                <div v-else class="fullscreen-cover-wrap">
-                  <img v-if="parseResult.cover_url" :src="parseResult.cover_url" alt="cover" referrerpolicy="no-referrer" class="fullscreen-cover" />
-                  <div v-else class="fullscreen-cover fullscreen-cover-fallback"><n-icon size="58"><Music /></n-icon></div>
-                </div>
-                <div class="fullscreen-meta">
-                  <p class="fullscreen-meta-song">{{ displaySongName }}</p>
-                  <p class="fullscreen-meta-artist">{{ displayArtistName }}</p>
-                  <p class="fullscreen-meta-album">{{ displayAlbumName }}</p>
-                </div>
-              </section>
-              <section
-                ref="lyricPanelRef"
-                class="panel-lyrics fullscreen-lyrics"
-                @wheel.prevent.stop="onLyricPanelWheel"
-                @touchstart.stop="onLyricPanelTouchStart"
-                @touchmove.prevent.stop="onLyricPanelTouchMove"
-                @touchend.stop="onLyricPanelTouchEnd"
-                @touchcancel.stop="onLyricPanelTouchEnd"
-              >
-                <p v-if="currentLyricEntry?.loading" class="lyric-placeholder">歌词加载中...</p>
-                <p v-else-if="currentTimedLyrics.length === 0" class="lyric-placeholder">暂无滚动歌词</p>
-                <div v-else class="lyric-line-list fullscreen-lyric-list">
-                  <div
-                    v-for="(line, index) in currentTimedLyrics"
-                    :key="`${line.time}-${index}`"
-                    :ref="(el) => setLyricLineRef(el, index)"
-                    class="lyric-row fullscreen-lyric-row"
-                    :class="{ active: index === currentLyricIndex }"
-                    @click="onLyricRowClick(line, index)"
-                  >
-                    <p class="lyric-main-text">{{ line.main || line.trans }}</p>
-                    <p v-if="line.trans" class="lyric-translation">{{ line.trans }}</p>
-                  </div>
-                </div>
-              </section>
-            </div>
-          </template>
-          <template v-else>
-            <div class="player-headline">
-              <p class="panel-song">{{ displaySongName }}</p>
-              <p class="panel-artist">{{ displayArtistName }}</p>
-            </div>
-            <transition name="player-mode-fade" mode="out-in">
-              <div
-                v-if="fullPlayerMode === 'lyric'"
-                key="lyric"
-                ref="lyricPanelRef"
-                class="panel-lyrics"
-                @wheel.prevent.stop="onLyricPanelWheel"
-                @touchstart.stop="onLyricPanelTouchStart"
-                @touchmove.prevent.stop="onLyricPanelTouchMove"
-                @touchend.stop="onLyricPanelTouchEnd"
-                @touchcancel.stop="onLyricPanelTouchEnd"
-              >
-                <p v-if="currentLyricEntry?.loading" class="lyric-placeholder">歌词加载中...</p>
-                <p v-else-if="currentTimedLyrics.length === 0" class="lyric-placeholder">暂无滚动歌词</p>
-                <div v-else class="lyric-line-list">
-                  <div
-                    v-for="(line, index) in currentTimedLyrics"
-                    :key="`${line.time}-${index}`"
-                    :ref="(el) => setLyricLineRef(el, index)"
-                    class="lyric-row"
-                    :class="{ active: index === currentLyricIndex }"
-                    @click="onLyricRowClick(line, index)"
-                  >
-                    <p class="lyric-main-text">{{ line.main || line.trans }}</p>
-                    <p v-if="line.trans" class="lyric-translation">{{ line.trans }}</p>
-                  </div>
-                </div>
-              </div>
-              <div v-else key="disc" class="disc-stage">
-                <div class="disc-needle" :class="{ engaged: isPlaying }">
-                  <span class="needle-arm"></span>
-                  <span class="needle-head"></span>
-                </div>
-                <div class="disc-record" :class="{ spinning: isPlaying }">
-                  <div class="disc-record-rings"></div>
-                  <img v-if="parseResult.cover_url" :src="parseResult.cover_url" alt="cover" referrerpolicy="no-referrer" class="disc-record-cover" />
-                  <div v-else class="disc-record-cover disc-record-fallback"><n-icon size="38"><Music /></n-icon></div>
-                </div>
-              </div>
-            </transition>
-          </template>
-          <div class="panel-progress" :class="{ 'fullscreen-progress': isPlayerFullscreen }">
-            <span class="time-text">{{ elapsedText }}</span>
-            <input class="range-input range-progress" type="range" min="0" :max="seekMax" step="0.1" :value="seekValue" @input="onSeekInput" />
-            <span class="time-text">{{ durationText }}</span>
-          </div>
-          <div v-if="isPlayerFullscreen" class="panel-controls-fullscreen">
-            <div class="panel-controls-center">
-              <button class="icon-btn panel-mode-btn" type="button" :title="fullModeToggleTitle" @click="toggleFullPlayerMode">
-                <n-icon size="19"><Vinyl v-if="fullPlayerMode === 'disc'" /><Music v-else /></n-icon>
-              </button>
-              <button class="icon-btn" type="button" :disabled="!hasPrevTrack || switchingTrack" @click="onPrevTrack"><n-icon size="20"><PlayerTrackPrev /></n-icon></button>
-              <button class="icon-btn panel-play-main" type="button" @click="togglePlayPause"><n-icon size="24"><PlayerPause v-if="isPlaying" /><PlayerPlay v-else /></n-icon></button>
-              <button class="icon-btn" type="button" :disabled="!hasNextTrack || switchingTrack" @click="onNextTrack"><n-icon size="20"><PlayerTrackNext /></n-icon></button>
-              <button class="icon-btn panel-mode-btn" type="button" :title="playModeTitle" @click="cyclePlayMode">
-                <n-icon size="19"><RepeatOnce v-if="isSingleMode" /><ArrowsShuffle2 v-else-if="isShuffleMode" /><Repeat v-else /></n-icon>
-              </button>
-            </div>
-            <div class="panel-tools-right">
-              <label class="quality-select-wrap">
-                <span class="quality-select-label">音质</span>
-                <select v-model="quality" class="quality-select-inline">
-                  <option v-for="opt in qualityOptions" :key="opt.value" :value="opt.value">{{ opt.short }}</option>
-                </select>
-              </label>
-              <n-dropdown :options="playerSettingsMenuOptions" trigger="click" @select="onPlayerSettingSelect">
-                <button class="icon-btn panel-mode-btn" type="button" title="播放设置">
-                  <n-icon size="19"><Settings /></n-icon>
-                </button>
-              </n-dropdown>
-              <div class="panel-volume panel-volume-inline">
-                <n-icon size="21"><Volume3 /></n-icon>
-                <input class="range-input range-volume" type="range" min="0" max="1" step="0.01" :value="volume" @input="onVolumeInput" />
-              </div>
-            </div>
-          </div>
-          <div v-else class="panel-controls">
-            <button class="icon-btn panel-mode-btn" type="button" :title="fullModeToggleTitle" @click="toggleFullPlayerMode">
-              <n-icon size="19"><Vinyl v-if="fullPlayerMode === 'disc'" /><Music v-else /></n-icon>
-            </button>
-            <button class="icon-btn" type="button" :disabled="!hasPrevTrack || switchingTrack" @click="onPrevTrack"><n-icon size="20"><PlayerTrackPrev /></n-icon></button>
-            <button class="icon-btn panel-play-main" type="button" @click="togglePlayPause"><n-icon size="24"><PlayerPause v-if="isPlaying" /><PlayerPlay v-else /></n-icon></button>
-            <button class="icon-btn" type="button" :disabled="!hasNextTrack || switchingTrack" @click="onNextTrack"><n-icon size="20"><PlayerTrackNext /></n-icon></button>
-            <button class="icon-btn panel-mode-btn" type="button" :title="playModeTitle" @click="cyclePlayMode">
-              <n-icon size="19"><RepeatOnce v-if="isSingleMode" /><ArrowsShuffle2 v-else-if="isShuffleMode" /><Repeat v-else /></n-icon>
-            </button>
-          </div>
-          <div v-if="!isPlayerFullscreen" class="panel-volume">
-            <n-icon size="21"><Volume3 /></n-icon>
-            <input class="range-input range-volume" type="range" min="0" max="1" step="0.01" :value="volume" @input="onVolumeInput" />
-          </div>
-        </aside>
-      </transition>
 
       <transition name="fade-up">
         <div v-if="showSettings" class="settings-overlay" @click.self="showSettings = false">
@@ -2214,61 +2395,293 @@ onUnmounted(() => {
 
 <style scoped>
 .home-shell {
-  --player-panel-width: 438px;
+  --player-panel-width: clamp(320px, calc((100vw - 740px) / 2), 438px);
+  --player-gap: 14px;
+  --home-shell-side-padding: 18px;
+  --home-main-width: max(
+    260px,
+    calc(100% - var(--player-panel-width) * 2 - var(--player-gap) * 4 + var(--home-shell-side-padding) * 2)
+  );
+  position: relative;
   display: grid;
-  grid-template-columns: minmax(0, min(920px, 96vw));
-  justify-content: center;
+  grid-template-columns: minmax(0, 1fr);
+  width: var(--home-main-width);
+  margin: 0 auto;
   align-items: stretch;
-  gap: 14px;
+  gap: var(--player-gap);
   min-height: 100vh;
-  padding: 32px 18px 8px;
-  overflow-x: hidden;
-  transition: grid-template-columns .32s cubic-bezier(.22,.81,.24,1), padding .3s ease, transform .26s ease;
+  padding: 24px var(--home-shell-side-padding) 14px;
+  overflow: visible;
+  transition: width .3s ease, padding .3s ease;
 }
-.home-center { width: 100%; display: flex; flex-direction: column; gap: 14px; min-height: calc(100vh - 60px); transition: transform .32s cubic-bezier(.22,.81,.24,1), opacity .24s ease; }
-.home-shell.with-player {
-  grid-template-columns:
-    minmax(0, min(920px, max(320px, calc(100vw - var(--player-panel-width) - 56px))))
-    var(--player-panel-width);
+.home-center { width: 100%; display: flex; flex-direction: column; gap: 12px; min-height: calc(100vh - 66px); transition: opacity .24s ease; }
+.home-shell.with-player { transform: none; }
+.home-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 14px;
+  width: 100%;
+  margin: 0;
+  padding: 16px 20px;
+  background: var(--card-bg);
+  color: var(--text-1);
 }
-.home-shell.with-player.with-player-opening-panel { transform: translateX(12px); }
-.home-shell.with-player.with-player-opening-shift { transform: translateX(0); }
-.home-shell.with-player.with-player-closing-shift { transform: translateX(12px); }
-.home-header { display: flex; justify-content: space-between; gap: 16px; padding: 24px; background: linear-gradient(160deg, rgba(11,83,206,.92), rgba(13,121,198,.88)); color: #fff; }
-.header-text h1 { margin: 6px 0; }
-.eyebrow { margin: 0; letter-spacing: .2em; font-size: 12px; }
-.header-desc { margin: 0; opacity: .92; font-size: 13px; }
-.header-actions { display: flex; gap: 8px; align-items: flex-start; }
-.settings-btn { width: 36px; height: 36px; display: grid; place-items: center; border-radius: 10px; border: 1px solid rgba(255,255,255,.2); background: rgba(255,255,255,.12); color: #fff; cursor: pointer; transition: background .2s; }
-.settings-btn:hover { background: rgba(255,255,255,.22); }
-.method-card,.quality-card,.main-card,.result-card { padding: 18px 22px; }
-.result-card { transition: opacity .24s ease, transform .28s ease; }
-.result-card-hidden { opacity: 0; pointer-events: none; }
-.result-card-closing { animation: card-reveal .32s cubic-bezier(.2,.82,.25,1); }
-.card-title { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; font-weight: 700; color: var(--text-1); font-size: 18px; }
+.player-align-zone {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: 100%;
+  min-width: 0;
+}
+.header-main { flex: 1; min-width: 0; }
+.top-search-row { display: flex; align-items: stretch; gap: 10px; width: 100%; }
+.top-query-input :deep(.n-input-wrapper) {
+  border-radius: 16px !important;
+  background: #fff !important;
+  border-color: rgba(20, 74, 172, 0.24) !important;
+}
+.top-query-input :deep(.n-input__input-el) { color: #1f2f4f !important; }
+.top-query-input :deep(.n-input__placeholder) { color: rgba(31, 47, 79, 0.58) !important; }
+.top-query-submit-btn { width: 100px; border-radius: 16px !important; }
+.header-actions { display: flex; gap: 8px; align-items: center; flex-shrink: 0; }
+.settings-btn {
+  width: 36px;
+  height: 36px;
+  display: grid;
+  place-items: center;
+  border-radius: 10px;
+  border: 1px solid var(--line-soft);
+  background: color-mix(in srgb, var(--surface) 84%, var(--brand-soft) 16%);
+  color: var(--brand-deep);
+  cursor: pointer;
+  transition: background .2s, transform .2s;
+}
+.settings-btn:hover {
+  background: color-mix(in srgb, var(--surface) 76%, var(--brand-soft) 24%);
+  transform: translateY(-1px);
+}
+.method-card,.main-card { padding: 12px 20px; }
+.result-card { padding: 12px 16px; }
+.result-card {
+  --compact-player-height: 152px;
+  position: relative;
+  transition: opacity .24s ease, transform .28s ease;
+}
+.method-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 8px; }
+.card-title { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; font-weight: 700; color: var(--text-1); font-size: 17px; }
+.method-head .card-title { margin-bottom: 0; }
 .method-options { display: flex; gap: 10px; flex-wrap: wrap; }
-.method-option { flex: 1; min-width: 120px; padding: 10px 12px; border-radius: 12px; border: 1px solid var(--line-soft); background: var(--tag-bg); color: var(--text-2); text-align: center; cursor: pointer; font-weight: 600; font-size: 18px; }
+.method-option { flex: 1; min-width: 120px; padding: 9px 12px; border-radius: 12px; border: 1px solid var(--line-soft); background: var(--tag-bg); color: var(--text-2); text-align: center; cursor: pointer; font-weight: 600; font-size: 17px; }
 .method-option input { display: none; }
 .method-option.active { border-color: var(--brand); background: var(--brand-soft); color: var(--brand); }
-.quality-tags { display: flex; flex-wrap: wrap; gap: 8px; }
-.quality-tag { padding: 6px 14px; border-radius: 20px; border: 1px solid var(--line-soft); background: var(--tag-bg); color: var(--tag-text); font-size: 13px; font-weight: 600; cursor: pointer; font-family: inherit; }
-.quality-tag.active { background: var(--tag-active-bg); color: var(--tag-active-text); border-color: var(--tag-active-bg); }
-.form-zone { margin-bottom: 12px; }
+.method-quality-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  width: calc((100% - 20px) / 3);
+  min-width: 0;
+  margin-left: auto;
+  padding: 9px 12px;
+  border-radius: 12px;
+  border: 1px solid var(--line-soft);
+  background: var(--tag-bg);
+  transition: none;
+}
+.method-quality-wrap:focus-within {
+  border-color: var(--line-soft);
+  box-shadow: none;
+}
+.method-quality-label { font-size: 14px; line-height: 1; color: var(--text-2); font-weight: 700; white-space: nowrap; }
+.method-quality-value {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 1;
+  min-width: 0;
+  height: 34px;
+  border-radius: 10px;
+  border: 1px solid color-mix(in srgb, #cfd9ea 74%, transparent);
+  background: color-mix(in srgb, #ffffff 95%, var(--brand-soft) 5%);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .72);
+  transition: none;
+}
+.method-quality-value:focus-within {
+  border-color: color-mix(in srgb, #cfd9ea 74%, transparent);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .72);
+}
+[data-theme="dark"] .method-quality-value {
+  background: color-mix(in srgb, #141f32 92%, var(--brand-soft) 8%);
+  border-color: color-mix(in srgb, #5c6f90 58%, #2f3f5b 42%);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .06);
+}
+.method-quality-nselect {
+  width: 100%;
+}
+.method-quality-nselect :deep(.n-base-selection) {
+  min-height: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  border: none !important;
+  box-shadow: none !important;
+  background: transparent !important;
+  padding: 0 8px;
+  cursor: pointer;
+}
+.method-quality-nselect :deep(.n-base-selection-label) {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  background-color: transparent !important;
+  color: var(--text-1);
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1;
+  text-align: center;
+}
+.method-quality-nselect :deep(.n-base-selection.n-base-selection--active .n-base-selection-label) {
+  background-color: transparent !important;
+}
+.method-quality-nselect :deep(.n-base-selection.n-base-selection--focus .n-base-selection-label) {
+  background-color: transparent !important;
+}
+.method-quality-nselect :deep(.n-base-selection-label .n-base-selection-input) {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+}
+.method-quality-nselect :deep(.n-base-selection-input__content) {
+  color: var(--text-1);
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1.1;
+  text-align: center;
+  width: 100%;
+}
+.method-quality-nselect :deep(.n-base-selection-placeholder) {
+  color: color-mix(in srgb, var(--text-2) 80%, transparent);
+  width: 100%;
+  text-align: center;
+}
+.method-quality-nselect :deep(.n-base-suffix) {
+  cursor: pointer;
+}
+.method-quality-nselect :deep(.n-base-arrow) {
+  color: color-mix(in srgb, var(--brand) 84%, var(--text-2) 16%);
+  font-size: 15px;
+}
+[data-theme="dark"] .method-quality-nselect :deep(.n-base-selection-label),
+[data-theme="dark"] .method-quality-nselect :deep(.n-base-selection-input__content) {
+  color: #e7efff;
+}
+[data-theme="dark"] .method-quality-nselect :deep(.n-base-selection-placeholder) {
+  color: rgba(188, 202, 227, .72);
+}
+:global(.method-quality-menu.n-base-select-menu) {
+  --n-color: #ffffff;
+  --n-option-text-color: #253452;
+  --n-option-text-color-pressed: #1b2a44;
+  --n-option-text-color-active: #1f2f4f;
+  --n-option-text-color-disabled: #b8c0cf;
+  --n-option-color-pending: #edf3fb;
+  --n-option-color-active: #dfe9f6;
+  --n-option-color-active-pending: #d8e5f4;
+  border-radius: 14px;
+  border: 1px solid #d6e0ef;
+  background: var(--n-color);
+  box-shadow: 0 16px 34px rgba(15, 30, 58, .18);
+  padding: 8px;
+}
+:global(.method-quality-menu .n-base-select-option) {
+  min-height: 40px;
+  border-radius: 10px;
+  margin-bottom: 3px;
+}
+:global(.method-quality-menu .n-base-select-option:last-child) {
+  margin-bottom: 0;
+}
+:global(.method-quality-menu .n-base-select-option .n-base-select-option__content) {
+  font-size: 14px;
+  color: inherit;
+}
+:global(.method-quality-menu .n-base-select-option.n-base-select-option--selected .n-base-select-option__content) {
+  font-weight: 800;
+}
+:global(.method-quality-menu .n-scrollbar-rail) {
+  display: none !important;
+}
+:global(.method-quality-menu .n-scrollbar-container) {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+:global(.method-quality-menu .n-scrollbar-container::-webkit-scrollbar) {
+  width: 0;
+  height: 0;
+}
+:global(html[data-theme="dark"] .method-quality-menu.n-base-select-menu) {
+  --n-color: #1a2637;
+  --n-option-text-color: #d3e0f6;
+  --n-option-text-color-pressed: #f2f7ff;
+  --n-option-text-color-active: #e8f0ff;
+  --n-option-text-color-disabled: rgba(184, 198, 224, .5);
+  --n-option-color-pending: rgba(83, 111, 160, .28);
+  --n-option-color-active: rgba(99, 142, 214, .36);
+  --n-option-color-active-pending: rgba(111, 155, 226, .44);
+  border-color: rgba(99, 124, 162, .62);
+  background: var(--n-color);
+  box-shadow: 0 20px 40px rgba(2, 8, 20, .56);
+}
+.form-zone { margin-bottom: 8px; }
 .query-row { display: flex; align-items: stretch; gap: 10px; }
 .query-input { flex: 1; min-width: 0; }
 .query-input :deep(.n-input-wrapper) { border-radius: 18px !important; }
 .query-submit-btn { border-radius: 18px !important; }
-.song-list-wrap { margin-top: 12px; }
+.song-list-wrap { margin-top: 0; }
+.form-zone + .song-list-wrap { margin-top: 8px; }
 .song-list {
   --song-item-gap: 6px;
   --song-item-visual-height: 70px;
+  --song-list-fixed-height: calc(var(--song-item-visual-height) * 5 + var(--song-item-gap) * 4);
   display: flex;
   flex-direction: column;
   gap: var(--song-item-gap);
-  max-height: calc(var(--song-item-visual-height) * 4 + var(--song-item-gap) * 3);
+  min-height: var(--song-list-fixed-height);
+  height: var(--song-list-fixed-height);
+  max-height: var(--song-list-fixed-height);
   overflow-y: auto;
+  scrollbar-width: auto;
+  scrollbar-color: transparent transparent;
+}
+.song-list::-webkit-scrollbar {
+  background: transparent;
+}
+.song-list::-webkit-scrollbar-track {
+  background: transparent;
+}
+.song-list::-webkit-scrollbar-thumb {
+  background: transparent;
+}
+.song-list-empty {
+  align-items: center;
+  justify-content: center;
 }
 .song-item { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--song-item-border); background: var(--song-item-bg); min-height: 70px; }
+.song-item-search {
+  cursor: pointer;
+  transition: transform .2s ease, box-shadow .2s ease, border-color .2s ease, background .2s ease;
+}
+.song-item-search:hover {
+  transform: translateY(0);
+  border-color: color-mix(in srgb, var(--brand) 50%, var(--song-item-border) 50%);
+  box-shadow: 0 10px 18px color-mix(in srgb, var(--brand) 18%, transparent);
+  background: color-mix(in srgb, var(--song-item-bg) 84%, var(--brand-soft) 16%);
+}
 .song-index { width: 18px; text-align: center; font-size: 12px; color: var(--text-2); }
 .cover { width: 48px; height: 48px; border-radius: 10px; object-fit: cover; flex-shrink: 0; }
 .cover-sm { width: 40px; height: 40px; }
@@ -2278,24 +2691,40 @@ onUnmounted(() => {
 .song-name { font-size: 14px; font-weight: 600; }
 .song-meta { font-size: 12px; color: var(--text-2); }
 .playlist-header { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
-.compact-player { display: grid; grid-template-columns: 92px 1fr; gap: 12px; padding: 10px 12px; border-radius: 14px; border: 1px solid var(--line-soft); background: rgba(255, 255, 255, 0.46); align-items: center; }
+.compact-player {
+  display: grid;
+  grid-template-columns: 82px 1fr;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: 14px;
+  border: 1px solid var(--line-soft);
+  background: rgba(255, 255, 255, 0.46);
+  align-items: center;
+  min-height: var(--compact-player-height);
+  height: var(--compact-player-height);
+  max-height: var(--compact-player-height);
+}
 [data-theme="dark"] .compact-player { background: rgba(25, 36, 57, 0.5); }
 .compact-player, .compact-player * { font-family: inherit; }
 .compact-cover-stack { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; align-self: center; }
-.compact-cover-btn { width: 92px; height: 92px; border: none; padding: 0; border-radius: 10px; overflow: hidden; background: transparent; cursor: pointer; }
+.compact-cover-btn { width: 82px; height: 82px; border: none; padding: 0; border-radius: 10px; overflow: hidden; background: transparent; cursor: pointer; }
 .compact-cover-btn img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .compact-cover-empty { width: 100%; height: 100%; display: grid; place-items: center; border-radius: 12px; background: var(--brand-soft); color: var(--brand); }
-.compact-quality-tag { max-width: 92px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-align: center; font-size: 12px; line-height: 1.2; padding: 3px 8px; border-radius: 999px; background: var(--brand-soft); color: var(--brand-deep); font-weight: 700; }
-.compact-main { min-width: 0; display: flex; flex-direction: column; gap: 10px; justify-content: center; }
-.compact-meta-btn { border: none; background: transparent; padding: 0; text-align: center; cursor: pointer; min-width: 0; width: 100%; }
-.compact-song-line { margin: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 17px; line-height: 1.15; color: var(--text-1); font-weight: 700; }
-.compact-lyrics-window { margin-top: 7px; height: 72px; overflow: hidden; display: flex; justify-content: center; }
+.compact-quality-tag { max-width: 82px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-align: center; font-size: 11px; line-height: 1.2; padding: 2px 7px; border-radius: 999px; background: var(--brand-soft); color: var(--brand-deep); font-weight: 700; }
+.compact-main { min-width: 0; display: flex; flex-direction: column; gap: 8px; justify-content: center; }
+.compact-meta-btn { border: none; background: transparent; padding: 0; text-align: center; cursor: pointer; min-width: 0; width: 100%; transform: translateY(3px); }
+.compact-song-line { margin: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 15px; line-height: 1.15; color: var(--text-1); font-weight: 700; }
+.compact-lyrics-window { margin-top: 11px; height: 60px; overflow: hidden; display: flex; justify-content: center; }
 .compact-lyrics-track { width: 100%; transition: transform .35s cubic-bezier(.2,.82,.25,1); will-change: transform; }
-.compact-lyric-line { margin: 0; height: 24px; line-height: 24px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 16px; color: var(--text-2); font-weight: 600; }
+.compact-lyric-line { margin: 0; height: 20px; line-height: 20px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 14px; color: var(--text-2); font-weight: 600; }
 .compact-lyric-line.active { color: #1d86ff; font-weight: 700; }
 .compact-controls-wrap { display: flex; justify-content: center; width: 100%; overflow-x: auto; scrollbar-width: none; }
 .compact-controls-wrap::-webkit-scrollbar { display: none; }
 .compact-controls { display: flex; align-items: center; justify-content: center; gap: 8px; flex-wrap: nowrap; width: fit-content; max-width: 100%; margin: 0 auto; white-space: nowrap; }
+.compact-controls .icon-btn { width: 38px; height: 38px; }
+.compact-volume { display: inline-flex; align-items: center; gap: 5px; min-width: 106px; }
+.compact-volume-icon { color: var(--text-2); }
+.range-volume { width: 76px; min-width: 58px; }
 .icon-btn { width: 42px; height: 42px; border-radius: 999px; border: 1px solid var(--line-soft); background: rgba(255,255,255,.72); color: var(--text-1); display: grid; place-items: center; cursor: pointer; transition: transform .18s ease, background .2s ease, opacity .2s ease; }
 [data-theme="dark"] .icon-btn { background: rgba(20, 30, 48, 0.72); }
 .icon-btn:hover { transform: translateY(-1px); }
@@ -2309,8 +2738,6 @@ onUnmounted(() => {
 .range-input::-moz-range-track { height: 4px; border-radius: 999px; background: rgba(15, 111, 255, .2); }
 .range-input::-moz-range-thumb { width: 14px; height: 14px; border-radius: 50%; background: var(--brand); border: none; }
 .range-progress { width: 100%; min-width: 140px; }
-.volume-wrap { display: flex; align-items: center; gap: 6px; color: var(--text-2); min-width: 102px; flex: 0 0 auto; }
-.range-volume { width: 74px; }
 .download-btn { width: 42px; height: 42px; }
 .native-audio { display: none; }
 .download-progress-wrap { margin-top: 10px; padding: 9px 11px 8px; border-radius: 12px; border: 1px solid var(--line-soft); background: color-mix(in oklab, var(--card-bg) 88%, #d9e9ff 12%); }
@@ -2327,18 +2754,12 @@ onUnmounted(() => {
 .download-progress-track.indeterminate .download-progress-fill { animation: download-indeterminate 1.15s linear infinite; }
 .download-progress-track.processing .download-progress-fill { animation: download-processing 1.2s ease-in-out infinite; }
 .download-progress-note { margin: 7px 0 0; font-size: 12px; line-height: 1.3; color: var(--text-2); word-break: break-word; }
-.result-card-placeholder {
-  width: 100%;
-  border-radius: 16px;
-  background: transparent;
-  pointer-events: none;
-}
-.home-footer { margin-top: auto; text-align: center; padding: 6px 0 0; color: var(--text-2); font-size: 13px; }
-.home-footer-main { display: inline-flex; align-items: center; gap: 8px; }
+.home-footer { margin-top: auto; text-align: center; padding: 2px 0 0; color: var(--text-2); font-size: 13px; transform: translateY(-2px); }
+.home-footer-main { display: inline-flex; align-items: center; gap: 6px; }
 .footer-sep { margin: 0; opacity: .76; }
 .footer-author-link { color: var(--text-2); text-decoration: none; transition: color .2s ease; }
 .footer-author-link:hover { color: var(--brand); text-decoration: underline; }
-.record-row { margin-top: 6px; display: flex; align-items: center; justify-content: center; gap: 8px; flex-wrap: wrap; font-size: 14px; line-height: 1.4; }
+.record-row { margin-top: 3px; display: flex; align-items: center; justify-content: center; gap: 6px; flex-wrap: wrap; font-size: 14px; line-height: 1.3; }
 .record-link { color: var(--text-2); text-decoration: none; transition: color .2s ease; font-weight: 500; }
 .record-link:hover { color: var(--brand); text-decoration: underline; }
 .record-sep { color: var(--text-2); opacity: .72; }
@@ -2358,152 +2779,371 @@ onUnmounted(() => {
 .meta-title h4 { margin: 0; }
 .meta-right { display: flex; align-items: center; gap: 8px; }
 .meta-help { margin: 10px 0 0; color: var(--text-2); font-size: 12px; line-height: 1.5; }
-.player-panel { width: auto; border-radius: 20px; padding: 12px 16px 14px; display: flex; flex-direction: column; gap: 10px; background: color-mix(in oklab, var(--card-bg) 88%, #d5e8ff 12%); box-shadow: 0 14px 34px rgba(6, 20, 44, .22); overflow: hidden; }
-[data-theme="dark"] .player-panel { background: color-mix(in oklab, var(--card-bg) 88%, #213451 12%); }
+.player-panel {
+  --player-accent-rgb: 37 118 227;
+  --player-accent-soft-rgb: 229 241 255;
+  --player-accent-deep-rgb: 19 44 88;
+  --player-accent-muted-rgb: 112 125 145;
+  width: auto;
+  box-sizing: border-box;
+  border-radius: 24px;
+  padding: 14px 18px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  border: 1px solid color-mix(in oklab, rgb(var(--player-accent-rgb)) 22%, var(--line-soft) 78%);
+  background:
+    radial-gradient(120% 95% at 8% 0%, rgb(var(--player-accent-rgb) / .2), transparent 58%),
+    linear-gradient(180deg, rgba(255, 255, 255, .96), rgba(243, 248, 255, .95));
+  box-shadow: 0 16px 36px rgba(6, 20, 44, .2);
+  overflow: hidden;
+}
+[data-theme="dark"] .player-panel {
+  border-color: color-mix(in oklab, rgb(var(--player-accent-rgb)) 34%, rgba(148, 163, 184, .34) 66%);
+  background:
+    radial-gradient(120% 92% at 10% 0%, rgb(var(--player-accent-rgb) / .26), transparent 58%),
+    linear-gradient(180deg, rgba(20, 28, 42, .96), rgba(12, 19, 32, .98));
+  box-shadow: 0 18px 38px rgba(2, 8, 20, .56);
+}
 .player-panel-inline {
   width: var(--player-panel-width);
+  box-sizing: border-box;
   min-height: 0;
-  height: auto;
-  max-height: none;
+  height: 100%;
+  max-height: 100%;
   margin: 0;
-  position: relative;
+  position: absolute;
+  left: calc(100% + var(--player-gap));
   top: 0;
   align-self: start;
   overscroll-behavior: contain;
+  z-index: 4;
   transition: transform .26s ease, opacity .26s ease, height .24s ease, max-height .24s ease;
 }
-.player-panel-inline.player-panel-opening { transform: translateX(18px); opacity: .88; }
-.player-panel-inline.player-panel-closing { transform: translateX(28px); opacity: 0; }
-.player-panel-header { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
-.panel-top-btn,.panel-close-arrow {
-  width: 32px;
-  height: 32px;
-  border: none;
-  border-radius: 999px;
-  background: rgba(255,255,255,.62);
-  color: var(--brand-deep);
-  padding: 0;
-  cursor: pointer;
-  display: grid;
-  place-items: center;
-  transition: transform .2s ease, background .2s ease, color .2s ease;
+.player-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 42px;
 }
-.panel-top-btn:hover,.panel-close-arrow:hover { transform: translateY(-1px); background: rgba(255,255,255,.8); }
-.panel-close-arrow { font-size: 30px; line-height: 1; transform: translateX(1px); }
-[data-theme="dark"] .panel-close-arrow { background: rgba(20, 30, 48, 0.72); color: #8ebaff; }
-[data-theme="dark"] .panel-top-btn { background: rgba(20, 30, 48, 0.72); color: #8ebaff; }
+.panel-header-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+.player-mode-switch { opacity: 1; }
+.panel-close-arrow-symbol {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 18px;
+  font-weight: 700;
+  line-height: 1;
+  transform: translateX(1px);
+}
 .player-headline { text-align: center; padding-top: 2px; }
 .panel-song,.panel-artist { margin: 0; text-align: center; }
-.panel-song { font-size: 27px; color: var(--text-1); font-weight: 800; line-height: 1.08; }
-.panel-artist { margin-top: 5px; color: var(--text-2); font-size: 16px; font-weight: 700; }
+.panel-song { font-size: 26px; color: rgb(var(--player-accent-deep-rgb)); font-weight: 800; line-height: 1.1; letter-spacing: .01em; }
+.panel-artist { margin-top: 5px; color: rgb(var(--player-accent-muted-rgb)); font-size: 16px; font-weight: 700; }
 .panel-lyrics {
   flex: 1;
   min-height: 0;
-  padding: 6px 8px;
+  padding: 8px 8px;
   overflow-y: auto;
   display: flex;
   justify-content: center;
-  scroll-padding-block: 40%;
+  scroll-padding-block: 44%;
   overscroll-behavior: contain;
   touch-action: pan-y;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
 }
-.lyric-placeholder { margin: 4px 0; color: var(--text-2); text-align: center; }
-.lyric-line-list { width: min(100%, 520px); display: flex; flex-direction: column; gap: 12px; padding: 26px 6px 34px; margin: 0 auto; }
+.panel-lyrics::-webkit-scrollbar { width: 0; height: 0; }
+.lyric-placeholder { margin: 6px 0; color: rgb(var(--player-accent-muted-rgb)); text-align: center; }
+.lyric-line-list { width: min(100%, 560px); display: flex; flex-direction: column; gap: 12px; padding: 24px 6px 34px; margin: 0 auto; }
 .lyric-row p { margin: 0; }
 .lyric-row {
-  color: var(--text-2);
+  color: rgb(var(--player-accent-muted-rgb));
   text-align: center;
   cursor: pointer;
-  opacity: .62;
-  transition: color .2s ease, transform .2s ease, opacity .2s ease;
+  opacity: .58;
+  transition: color .2s ease, transform .2s ease, opacity .2s ease, text-shadow .2s ease;
 }
-.lyric-row.active { color: #1d86ff; transform: scale(1.03); opacity: 1; }
-.lyric-main-text { font-size: clamp(13px, 1.32vw, 19px); line-height: 1.35; font-weight: 700; }
-.lyric-translation { margin-top: 4px; font-size: clamp(9px, .9vw, 12px); opacity: .85; }
-.disc-stage { flex: 1; min-height: 0; display: grid; place-items: center; position: relative; overflow: hidden; }
-.disc-record { width: min(74vw, 332px); aspect-ratio: 1; border-radius: 50%; position: relative; display: grid; place-items: center; box-shadow: 0 16px 34px rgba(6, 16, 34, .34), inset 0 0 0 3px rgba(255,255,255,.07); background: radial-gradient(circle at center, rgba(26, 29, 37, 1) 0%, rgba(6, 8, 12, 1) 48%, rgba(38, 41, 53, 1) 100%); }
+.lyric-row.active {
+  color: rgb(var(--player-accent-rgb));
+  transform: scale(1.02);
+  opacity: 1;
+  text-shadow: 0 4px 18px rgb(var(--player-accent-rgb) / .24);
+}
+.lyric-main-text { font-size: clamp(15px, 1.38vw, 21px); line-height: 1.38; font-weight: 700; }
+.lyric-translation { margin-top: 4px; font-size: clamp(11px, .96vw, 14px); opacity: .86; }
+.disc-stage {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  padding: 16px 8px;
+}
+.disc-record {
+  width: min(74vw, 328px);
+  aspect-ratio: 1;
+  border-radius: 50%;
+  position: relative;
+  display: grid;
+  place-items: center;
+  box-shadow: 0 16px 34px rgba(6, 16, 34, .34), inset 0 0 0 3px rgba(255,255,255,.07);
+  background: radial-gradient(circle at center, rgba(26, 29, 37, 1) 0%, rgba(6, 8, 12, 1) 48%, rgba(38, 41, 53, 1) 100%);
+}
 .disc-record-rings { position: absolute; inset: 0; border-radius: 50%; background: repeating-radial-gradient(circle, rgba(255,255,255,.035) 0 3px, rgba(255,255,255,.008) 3px 7px); pointer-events: none; }
 .disc-record-cover { width: 58%; aspect-ratio: 1; object-fit: cover; border-radius: 50%; border: 5px solid rgba(255,255,255,.12); z-index: 1; }
 .disc-record-fallback { display: grid; place-items: center; color: #89b9ff; background: radial-gradient(circle, rgba(34, 58, 96, 1), rgba(12, 20, 34, 1)); }
 .disc-record.spinning { animation: disc-spin 7.5s linear infinite; }
-.disc-needle { position: absolute; top: 6%; right: 7%; width: min(40vw, 170px); height: min(40vw, 170px); transform-origin: 15% 12%; transform: rotate(-28deg); transition: transform .38s cubic-bezier(.35,.78,.2,1); z-index: 4; pointer-events: none; }
-.disc-needle.engaged { transform: rotate(-3deg); }
-.needle-arm { position: absolute; left: 16%; top: 13%; width: 10px; height: 72%; border-radius: 999px; background: linear-gradient(180deg, #f4f7ff, #cad4ea 40%, #eff3ff); box-shadow: 0 0 0 1px rgba(0,0,0,.08); }
-.needle-head { position: absolute; right: 5%; top: 60%; width: 34px; height: 14px; border-radius: 4px; background: linear-gradient(180deg, #f6f8ff, #d8e0f2); box-shadow: 0 3px 10px rgba(0,0,0,.2); transform: rotate(18deg); }
-.disc-needle::before { content: ""; position: absolute; width: 24px; height: 24px; border-radius: 50%; left: 10%; top: 4%; background: radial-gradient(circle, #f8f8f8 0 32%, #d0d4dc 33% 68%, #f0f2f7 69% 100%); box-shadow: 0 0 0 8px rgba(255,255,255,.05); }
 .panel-progress { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 8px; }
 .panel-controls { display: flex; justify-content: center; align-items: center; gap: 14px; }
-.panel-play-main { width: 56px; height: 56px; }
+.panel-play-main { width: 58px; height: 58px; background: linear-gradient(160deg, rgb(var(--player-accent-rgb)), rgb(var(--player-accent-deep-rgb))); color: #fff; border: none; box-shadow: 0 10px 22px rgb(var(--player-accent-rgb) / .34); }
+.panel-play-main:hover { filter: brightness(1.04); transform: translateY(-1px); }
 .panel-mode-btn { width: 40px; height: 40px; }
-.panel-volume { display: flex; align-items: center; justify-content: center; gap: 8px; color: var(--text-2); }
-.player-fullscreen-body {
+.player-panel .icon-btn {
+  border-color: rgb(var(--player-accent-rgb) / .25);
+  background: rgb(var(--player-accent-soft-rgb) / .58);
+  color: rgb(var(--player-accent-deep-rgb));
+}
+.player-panel .icon-btn:hover { background: rgb(var(--player-accent-soft-rgb) / .86); }
+[data-theme="dark"] .player-panel .icon-btn {
+  border-color: rgb(var(--player-accent-rgb) / .34);
+  background: rgb(var(--player-accent-rgb) / .16);
+  color: rgb(var(--player-accent-deep-rgb));
+}
+[data-theme="dark"] .player-panel .icon-btn:hover { background: rgb(var(--player-accent-rgb) / .26); }
+.player-panel .time-text { color: rgb(var(--player-accent-muted-rgb)); }
+.player-panel .range-input::-webkit-slider-runnable-track { background: rgb(var(--player-accent-rgb) / .2); }
+.player-panel .range-input::-webkit-slider-thumb { background: rgb(var(--player-accent-rgb)); box-shadow: 0 2px 8px rgb(var(--player-accent-rgb) / .35); }
+.player-panel .range-input::-moz-range-track { background: rgb(var(--player-accent-rgb) / .2); }
+.player-panel .range-input::-moz-range-thumb { background: rgb(var(--player-accent-rgb)); }
+.full-player {
+  position: relative;
   flex: 1;
   min-height: 0;
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: clamp(20px, 2.8vw, 48px);
-  align-items: stretch;
-  padding: 4px 2px 2px;
+  height: calc(100vh - 160px);
+  overflow: hidden;
 }
-.player-fullscreen-left {
-  min-width: 0;
+.full-player .player-content {
+  position: absolute;
+  display: flex;
+  flex-direction: row;
+  justify-content: center;
+  align-items: center;
+  width: 100%;
+  height: 100%;
+  transition:
+    opacity 0.3s cubic-bezier(0.34, 1.56, 0.64, 1),
+    transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+.full-player .content-left {
+  position: absolute;
+  left: 0;
+  width: 48%;
+  min-width: 48%;
+  height: 100%;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 16px;
+  transition:
+    width 0.5s cubic-bezier(0.34, 1.56, 0.64, 1),
+    opacity 0.5s cubic-bezier(0.34, 1.56, 0.64, 1),
+    transform 0.5s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+.full-player .content-right {
+  position: absolute;
+  right: 0;
+  width: 52%;
+  max-width: 52%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  mix-blend-mode: var(--lyric-blend-mode, normal);
+  transition:
+    width 0.5s cubic-bezier(0.34, 1.56, 0.64, 1) 0.5s,
+    opacity 0.3s ease;
 }
 .fullscreen-cover-wrap {
   width: 70%;
   max-width: 50vh;
-  aspect-ratio: 1;
-  border-radius: 24px;
+  aspect-ratio: 1 / 1;
+  border-radius: 30px;
   overflow: hidden;
-  box-shadow: 0 24px 56px rgba(6, 20, 44, .28);
-  border: 1px solid rgba(255,255,255,.22);
+  box-shadow: 0 0 20px 10px rgba(0, 0, 0, 0.1);
 }
 .fullscreen-cover { width: 100%; height: 100%; object-fit: cover; display: block; }
 .fullscreen-cover-fallback {
+  width: 100%;
+  height: 100%;
   display: grid;
   place-items: center;
-  background: color-mix(in oklab, var(--brand-soft) 68%, #f4f8ff 32%);
-  color: var(--brand);
+  color: rgb(var(--player-accent-rgb));
+  background: rgb(var(--player-accent-soft-rgb) / .18);
 }
-.fullscreen-meta { width: 70%; max-width: 50vh; text-align: center; }
+.fullscreen-meta {
+  display: flex;
+  flex-direction: column;
+  width: 70%;
+  max-width: 50vh;
+  margin-top: 24px;
+  padding: 0 2px;
+}
 .fullscreen-meta p { margin: 0; }
-.fullscreen-meta-song { font-size: clamp(24px, 2.05vw, 34px); line-height: 1.2; font-weight: 800; color: var(--text-1); }
-.fullscreen-meta-artist { margin-top: 8px; font-size: clamp(16px, 1.3vw, 20px); color: var(--text-2); font-weight: 700; }
-.fullscreen-meta-album { margin-top: 7px; font-size: clamp(13px, .95vw, 15px); color: var(--text-2); opacity: .9; }
+.fullscreen-meta-song {
+  font-size: clamp(30px, 2.15vw, 42px);
+  line-height: 1.18;
+  font-weight: 800;
+  color: rgb(var(--player-accent-deep-rgb));
+}
+.fullscreen-meta-artist {
+  margin-top: 8px;
+  font-size: clamp(18px, 1.24vw, 24px);
+  color: rgb(var(--player-accent-muted-rgb));
+  font-weight: 700;
+}
+.fullscreen-meta-album {
+  margin-top: 8px;
+  font-size: clamp(14px, .94vw, 17px);
+  color: rgb(var(--player-accent-muted-rgb));
+  opacity: .88;
+}
+.fullscreen-meta-tags {
+  margin-top: 10px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.fullscreen-meta-tag {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid rgb(var(--player-accent-rgb) / .24);
+  background: rgb(var(--player-accent-soft-rgb) / .18);
+  color: rgb(var(--player-accent-deep-rgb));
+  font-size: 12px;
+  font-weight: 700;
+}
 .fullscreen-lyrics {
-  padding: 8px 6px 6px;
-  scroll-padding-block: 45%;
-  mask: linear-gradient(180deg, transparent 0%, rgba(255,255,255,.72) 7%, #fff 14%, #fff 86%, transparent 100%);
-  -webkit-mask: linear-gradient(180deg, transparent 0%, rgba(255,255,255,.72) 7%, #fff 14%, #fff 86%, transparent 100%);
+  padding: 0;
+  scroll-padding-block: 50%;
+  mask: linear-gradient(180deg, transparent 0%, rgba(255,255,255,.8) 7%, #fff 15%, #fff 85%, transparent 100%);
+  -webkit-mask: linear-gradient(180deg, transparent 0%, rgba(255,255,255,.8) 7%, #fff 15%, #fff 85%, transparent 100%);
 }
-.fullscreen-lyric-list {
-  width: min(100%, 920px);
-  gap: 20px;
-  padding: 16vh 18px 20vh;
+.fullscreen-lyric-scroll {
+  width: 100%;
+  height: 100%;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding-left: 10px;
+  padding-right: 78px;
+  box-sizing: border-box;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
 }
-.fullscreen-lyric-row { opacity: .26; }
-.fullscreen-lyric-row.active { opacity: 1; transform: scale(1.02); }
-.fullscreen-lyric-row .lyric-main-text { font-size: clamp(32px, 2.85vw, 54px); line-height: 1.28; }
-.fullscreen-lyric-row .lyric-translation { margin-top: 8px; font-size: clamp(16px, 1.35vw, 24px); }
-.fullscreen-disc-stage { width: 100%; min-height: min(56vh, 520px); }
-.fullscreen-disc-stage .disc-record { width: min(33vw, 430px); }
-.fullscreen-disc-stage .disc-needle { width: min(23vw, 228px); height: min(23vw, 228px); top: 1%; right: 10%; }
+.fullscreen-lyric-scroll::-webkit-scrollbar { display: none; }
+.fullscreen-lyric-scroll .placeholder {
+  width: 100%;
+}
+.fullscreen-lyric-scroll .placeholder:first-child {
+  height: 300px;
+  display: flex;
+  align-items: flex-end;
+}
+.fullscreen-lyric-scroll .placeholder-bottom {
+  height: 0;
+  padding-top: 100%;
+}
+.fullscreen-lrc-line {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  margin: 6px 0;
+  padding: 10px 16px;
+  transform: scale(.95);
+  transform-origin: left center;
+  width: 100%;
+  opacity: .3;
+  border-radius: 8px;
+  cursor: pointer;
+  transition:
+    opacity .35s ease,
+    transform .5s cubic-bezier(.25,.1,.25,1),
+    color .2s ease;
+}
+.fullscreen-lrc-line::before {
+  content: "";
+  display: block;
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 100%;
+  height: 100%;
+  border-radius: 8px;
+  background-color: rgb(var(--player-accent-rgb) / .14);
+  opacity: 0;
+  transform: scale(1.05);
+  transition:
+    transform .35s ease,
+    opacity .35s ease;
+  pointer-events: none;
+}
+.fullscreen-lrc-line .content {
+  position: relative;
+  z-index: 1;
+  display: block;
+  width: 100%;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  white-space: normal;
+  font-size: clamp(40px, 2.9vw, 58px);
+  line-height: 1.3;
+  font-weight: 700;
+}
+.fullscreen-lrc-line .tran {
+  position: relative;
+  z-index: 1;
+  margin-top: 8px;
+  opacity: .6;
+  width: 100%;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  white-space: normal;
+  font-size: clamp(16px, 1.18vw, 22px);
+}
+.fullscreen-lrc-line.on {
+  opacity: 1 !important;
+  transform: scale(1);
+}
+.fullscreen-lrc-line.on::before {
+  transform: scale(1);
+  opacity: 1;
+}
 .panel-controls-fullscreen {
-  display: flex;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  min-height: 80px;
+  gap: 14px;
+  width: min(100%, 1280px);
+  margin: 0 auto;
+  min-height: 84px;
 }
-.panel-controls-center { display: flex; align-items: center; gap: 14px; }
+.panel-tools-left { min-height: 1px; }
+.panel-controls-center { display: flex; align-items: center; justify-content: center; gap: 14px; }
 .panel-tools-right {
-  margin-left: auto;
+  margin-left: 0;
   display: flex;
   align-items: center;
+  justify-content: flex-end;
   gap: 10px;
 }
 .quality-select-wrap {
@@ -2511,16 +3151,16 @@ onUnmounted(() => {
   align-items: center;
   gap: 6px;
   border-radius: 999px;
-  border: 1px solid var(--line-soft);
-  background: rgba(255,255,255,.64);
+  border: 1px solid rgb(var(--player-accent-rgb) / .26);
+  background: rgb(var(--player-accent-soft-rgb) / .58);
   padding: 6px 10px;
 }
-[data-theme="dark"] .quality-select-wrap { background: rgba(20, 30, 48, 0.72); }
-.quality-select-label { font-size: 12px; color: var(--text-2); font-weight: 600; }
+[data-theme="dark"] .quality-select-wrap { border-color: rgb(var(--player-accent-rgb) / .36); background: rgb(var(--player-accent-rgb) / .16); }
+.quality-select-label { font-size: 12px; color: rgb(var(--player-accent-muted-rgb)); font-weight: 600; }
 .quality-select-inline {
   border: none;
   background: transparent;
-  color: var(--text-1);
+  color: rgb(var(--player-accent-deep-rgb));
   font-size: 13px;
   font-weight: 700;
   line-height: 1;
@@ -2530,57 +3170,106 @@ onUnmounted(() => {
   font-family: inherit;
 }
 .quality-select-inline option { color: #111a2c; }
-.panel-volume-inline { min-width: 130px; justify-content: flex-end; }
-.fullscreen-progress { margin-top: 2px; }
+.fullscreen-progress {
+  width: min(50%, 620px);
+  margin: 0 auto 2px;
+}
 .player-inline-enter-active,.player-inline-leave-active { transition: opacity .22s ease; }
 .player-inline-enter-active .player-panel-inline,.player-inline-leave-active .player-panel-inline { transition: transform .26s ease, opacity .22s ease; }
 .player-inline-enter-from,.player-inline-leave-to { opacity: 0; }
 .player-inline-enter-from .player-panel-inline,.player-inline-leave-to .player-panel-inline { transform: translateX(28px); opacity: 0; }
 .player-mode-fade-enter-active,.player-mode-fade-leave-active { transition: opacity .2s ease, transform .2s ease; }
 .player-mode-fade-enter-from,.player-mode-fade-leave-to { opacity: 0; transform: translateY(8px); }
-.player-panel-inline.is-player-fullscreen,
-.player-panel-inline:fullscreen {
-  width: 100%;
-  height: 100%;
-  max-height: 100%;
+.player-panel-inline.is-player-fullscreen {
+  width: 100vw;
+  height: 100vh;
+  max-height: 100vh;
   margin: 0;
   border-radius: 0;
   border: none;
   box-shadow: none;
-  padding: 18px 30px 22px;
+  padding: 16px 30px 22px;
+  position: fixed;
+  inset: 0;
+  color: rgb(var(--player-accent-rgb));
+  background-color: #00000060;
+  backdrop-filter: blur(80px);
+  overflow: hidden;
+}
+.player-panel-inline.is-player-fullscreen::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background-image:
+    radial-gradient(74rem 50rem at 8% 0%, rgb(var(--player-accent-rgb) / .28), transparent 62%),
+    radial-gradient(62rem 36rem at 96% 100%, rgb(var(--player-accent-rgb) / .14), transparent 68%);
+  pointer-events: none;
+}
+.player-panel-inline.is-player-fullscreen > * {
   position: relative;
-  top: 0;
-  background:
-    radial-gradient(80rem 52rem at 16% 14%, rgba(255, 255, 255, .42), transparent 68%),
-    linear-gradient(180deg, rgba(234, 242, 252, 0.98), rgba(214, 227, 246, 0.98));
+  z-index: 1;
 }
-[data-theme="dark"] .player-panel-inline.is-player-fullscreen,
-[data-theme="dark"] .player-panel-inline:fullscreen {
-  background:
-    radial-gradient(76rem 52rem at 30% 8%, rgba(53, 84, 138, 0.3), transparent 60%),
-    linear-gradient(180deg, rgba(20, 29, 44, 0.98), rgba(12, 18, 30, 0.99));
+[data-theme="dark"] .player-panel-inline.is-player-fullscreen {
+  color: rgb(var(--player-accent-rgb));
+  background-color: #00000066;
+  backdrop-filter: blur(84px);
 }
-[data-theme="dark"] .player-panel-inline.is-player-fullscreen .panel-song,
-[data-theme="dark"] .player-panel-inline.is-player-fullscreen .panel-artist,
-[data-theme="dark"] .player-panel-inline.is-player-fullscreen .fullscreen-meta-song,
-[data-theme="dark"] .player-panel-inline.is-player-fullscreen .fullscreen-meta-artist,
-[data-theme="dark"] .player-panel-inline.is-player-fullscreen .fullscreen-meta-album,
-[data-theme="dark"] .player-panel-inline.is-player-fullscreen .lyric-row,
-[data-theme="dark"] .player-panel-inline.is-player-fullscreen .time-text,
-[data-theme="dark"] .player-panel-inline.is-player-fullscreen .panel-volume,
-[data-theme="dark"] .player-panel-inline.is-player-fullscreen .quality-select-label,
-[data-theme="dark"] .player-panel-inline.is-player-fullscreen .quality-select-inline {
-  color: #dbe9ff;
+[data-theme="dark"] .player-panel-inline.is-player-fullscreen::before {
+  background-image:
+    radial-gradient(72rem 48rem at 8% 0%, rgb(var(--player-accent-rgb) / .28), transparent 62%),
+    radial-gradient(64rem 38rem at 96% 100%, rgb(var(--player-accent-rgb) / .12), transparent 68%);
 }
-[data-theme="dark"] .player-panel-inline.is-player-fullscreen .lyric-row.active {
-  color: #4da6ff;
+.player-panel-inline.is-player-fullscreen .player-panel-header {
+  position: absolute;
+  top: 12px;
+  left: 22px;
+  right: 22px;
+  z-index: 5;
+}
+.player-panel-inline.is-player-fullscreen .panel-top-btn,
+.player-panel-inline.is-player-fullscreen .panel-close-arrow {
+  background: rgb(var(--player-accent-rgb) / .14);
+  color: rgb(var(--player-accent-deep-rgb));
+}
+.player-panel-inline.is-player-fullscreen .fullscreen-meta-song,
+.player-panel-inline.is-player-fullscreen .fullscreen-lrc-line.on {
+  color: rgb(var(--player-accent-soft-rgb));
+}
+.player-panel-inline.is-player-fullscreen .fullscreen-meta-artist,
+.player-panel-inline.is-player-fullscreen .fullscreen-meta-album,
+.player-panel-inline.is-player-fullscreen .fullscreen-lrc-line,
+.player-panel-inline.is-player-fullscreen .time-text,
+.player-panel-inline.is-player-fullscreen .quality-select-label,
+.player-panel-inline.is-player-fullscreen .quality-select-inline {
+  color: rgb(var(--player-accent-soft-rgb) / .82);
+}
+.player-panel-inline.is-player-fullscreen .fullscreen-meta-tag,
+.player-panel-inline.is-player-fullscreen .quality-select-wrap {
+  border-color: rgb(var(--player-accent-soft-rgb) / .26);
+  background: rgb(var(--player-accent-soft-rgb) / .12);
+}
+.player-panel-inline.is-player-fullscreen .panel-progress {
+  width: min(66%, 780px);
+  margin-inline: auto;
+}
+.player-panel-inline.is-player-fullscreen .panel-controls-fullscreen .icon-btn {
+  border-color: rgb(var(--player-accent-rgb) / .24);
+  background: rgb(var(--player-accent-rgb) / .12);
+}
+.player-panel-inline.is-player-fullscreen .panel-controls-fullscreen .panel-play-main {
+  width: 62px;
+  height: 62px;
+  background: rgb(var(--player-accent-rgb) / .2);
+  border: 1px solid rgb(var(--player-accent-rgb) / .34);
+  color: rgb(var(--player-accent-deep-rgb));
+  box-shadow: none;
+}
+.player-panel-inline.is-player-fullscreen .panel-controls-fullscreen .panel-play-main:hover {
+  background: rgb(var(--player-accent-rgb) / .28);
+  transform: translateY(-1px);
 }
 .fade-up-enter-active,.fade-up-leave-active { transition: all .2s ease; }
 .fade-up-enter-from,.fade-up-leave-to { opacity: 0; transform: translateY(8px); }
-@keyframes card-reveal {
-  from { opacity: .62; transform: translateY(8px); }
-  to { opacity: 1; transform: translateY(0); }
-}
 @keyframes disc-spin {
   from { transform: rotate(0deg); }
   to { transform: rotate(360deg); }
@@ -2593,93 +3282,115 @@ onUnmounted(() => {
   0%, 100% { opacity: .55; }
   50% { opacity: 1; }
 }
-@media (max-width: 1240px) {
-  .home-shell { --player-panel-width: 400px; }
-}
-@media (max-width: 980px) {
+@media (max-width: 1200px) {
   .home-shell,
   .home-shell.with-player {
     grid-template-columns: minmax(0, 1fr);
+    width: 100%;
+    max-width: 100%;
     --player-panel-width: min(100vw - 28px, 720px);
-    padding: 18px 14px 4px;
+    --home-shell-side-padding: 14px;
+    --home-main-width: 100%;
+    padding: 14px var(--home-shell-side-padding) 10px;
   }
   .player-panel-inline {
-    position: relative;
-    top: 0;
+    position: fixed;
+    top: 18px;
+    bottom: 4px;
+    left: auto;
+    right: 14px;
     width: var(--player-panel-width);
     min-height: 0;
-    height: auto;
-    max-height: none;
-    margin: 0 auto;
+    height: calc(100vh - 22px);
+    max-height: calc(100vh - 22px);
+    margin: 0;
   }
-  .player-fullscreen-body {
-    grid-template-columns: minmax(0, 1fr);
-    gap: 14px;
+  .full-player {
+    height: calc(100vh - 192px);
   }
-  .player-fullscreen-left { gap: 12px; }
-  .fullscreen-cover-wrap { width: min(58vw, 340px); }
-  .fullscreen-disc-stage { min-height: min(42vh, 420px); }
-  .fullscreen-disc-stage .disc-record { width: min(52vw, 320px); }
-  .fullscreen-disc-stage .disc-needle { width: min(34vw, 200px); height: min(34vw, 200px); right: 4%; }
-  .fullscreen-lyric-list { width: 100%; padding: 7vh 8px 14vh; }
-  .fullscreen-lyric-row .lyric-main-text { font-size: clamp(24px, 4.8vw, 38px); }
-  .fullscreen-lyric-row .lyric-translation { font-size: clamp(13px, 2.7vw, 19px); }
+  .player-panel-inline.is-player-fullscreen .full-player .content-left {
+    display: none;
+  }
+  .player-panel-inline.is-player-fullscreen .full-player .content-right {
+    left: 0;
+    right: auto;
+    width: 100%;
+    max-width: 100%;
+  }
+  .fullscreen-lyric-scroll { width: 100%; padding: 0 22px 0 4px; }
+  .fullscreen-lyric-scroll .placeholder:first-child { height: 210px; }
+  .fullscreen-lrc-line .content { font-size: clamp(30px, 4.2vw, 44px); }
+  .fullscreen-lrc-line .tran { font-size: clamp(14px, 2.2vw, 19px); }
   .panel-controls-fullscreen {
-    flex-wrap: wrap;
-    justify-content: center;
+    grid-template-columns: minmax(0, 1fr);
     row-gap: 10px;
   }
+  .panel-tools-left { display: none; }
+  .panel-controls-center { justify-content: center; }
   .panel-tools-right {
     margin-left: 0;
     width: 100%;
     justify-content: center;
     flex-wrap: wrap;
   }
+  .song-list { --song-list-fixed-height: calc(var(--song-item-visual-height) * 4 + var(--song-item-gap) * 3); }
+  .fullscreen-progress { width: min(90%, 740px); }
 }
 @media (max-width: 720px) {
   .home-shell,
   .home-shell.with-player { --player-panel-width: 100vw; }
-  .home-center { min-height: calc(100vh - 46px); }
-  .home-header { padding: 18px; }
-  .main-card,.method-card,.quality-card,.result-card { padding: 16px; }
+  .home-center { min-height: calc(100vh - 56px); }
+  .home-header { width: 100%; padding: 14px; }
+  .top-search-row { gap: 8px; }
+  .top-query-submit-btn { width: 90px; }
+  .main-card,.method-card { padding: 13px 16px; }
+  .result-card { --compact-player-height: 148px; padding: 10px 12px; }
   .card-title { font-size: 18px; }
   .method-option { font-size: 16px; }
-  .quality-tag { font-size: 13px; }
+  .method-head { flex-wrap: wrap; align-items: stretch; }
+  .method-quality-wrap { width: 100%; justify-content: space-between; }
+  .method-quality-value { max-width: none; min-width: 0; flex: 1; }
+  .method-quality-nselect { max-width: none; min-width: 0; width: 100%; }
+  .song-list { --song-list-fixed-height: calc(var(--song-item-visual-height) * 4 + var(--song-item-gap) * 3); }
   .result-grid { grid-template-columns: 1fr; }
-  .compact-player { grid-template-columns: 78px 1fr; gap: 9px; padding: 8px 10px; }
+  .compact-player { grid-template-columns: 72px 1fr; gap: 8px; padding: 7px 8px; }
   .compact-cover-stack { gap: 5px; }
-  .compact-cover-btn { width: 78px; height: 78px; }
-  .compact-quality-tag { max-width: 78px; font-size: 11px; padding: 2px 6px; }
+  .compact-cover-btn { width: 72px; height: 72px; }
+  .compact-quality-tag { max-width: 72px; font-size: 10px; padding: 2px 6px; }
   .compact-song-line { font-size: 14px; }
-  .compact-lyrics-window { height: 72px; }
-  .compact-lyric-line { height: 24px; line-height: 24px; font-size: 13px; }
+  .compact-lyrics-window { height: 60px; }
+  .compact-lyric-line { height: 20px; line-height: 20px; font-size: 12px; }
   .compact-controls { width: fit-content; max-width: none; gap: 6px; }
+  .compact-volume { min-width: 96px; gap: 4px; }
+  .range-volume { width: 60px; min-width: 56px; }
   .progress-wrap { width: 220px; min-width: 148px; order: 0; gap: 5px; }
   .time-text { min-width: 34px; font-size: 13px; }
-  .volume-wrap { width: auto; min-width: 92px; gap: 5px; }
-  .range-volume { width: 62px; }
   .download-progress-wrap { margin-top: 9px; padding: 8px 9px 7px; }
   .download-progress-title { font-size: 12px; }
   .download-progress-note { font-size: 11px; }
-  .player-panel-inline { margin: 0; width: 100%; height: 100vh; max-height: 100vh; border-radius: 0; }
+  .player-panel-inline {
+    position: fixed;
+    inset: 0;
+    margin: 0;
+    width: 100%;
+    height: 100vh;
+    max-height: 100vh;
+    border-radius: 0;
+  }
   .panel-top-btn,.panel-close-arrow { width: 30px; height: 30px; }
-  .lyric-main-text { font-size: clamp(13px, 3.8vw, 19px); }
-  .lyric-translation { font-size: clamp(8px, 2.8vw, 11px); }
+  .lyric-main-text { font-size: clamp(15px, 4.2vw, 21px); }
+  .lyric-translation { font-size: clamp(10px, 3.1vw, 13px); }
   .panel-song { font-size: 25px; }
   .panel-artist { font-size: 15px; }
-  .disc-record { width: min(82vw, 300px); }
-  .disc-needle { width: min(46vw, 160px); height: min(46vw, 160px); right: 2%; top: 7%; }
-  .player-fullscreen-body { gap: 8px; }
-  .fullscreen-cover-wrap { width: min(66vw, 296px); border-radius: 16px; }
-  .fullscreen-meta-song { font-size: clamp(20px, 6.4vw, 28px); }
-  .fullscreen-meta-artist { font-size: clamp(14px, 4.1vw, 17px); }
-  .fullscreen-meta-album { font-size: clamp(12px, 3.6vw, 14px); }
-  .fullscreen-lyric-list { padding: 4vh 4px 10vh; gap: 14px; }
-  .fullscreen-lyric-row .lyric-main-text { font-size: clamp(22px, 6.2vw, 32px); }
-  .fullscreen-lyric-row .lyric-translation { font-size: clamp(13px, 3.6vw, 17px); }
+  .full-player { height: calc(100vh - 198px); }
+  .fullscreen-lyric-scroll { padding: 0 12px 0 2px; }
+  .fullscreen-lyric-scroll .placeholder:first-child { height: 160px; }
+  .fullscreen-lrc-line { padding: 8px 12px; }
+  .fullscreen-lrc-line .content { font-size: clamp(24px, 6.2vw, 35px); }
+  .fullscreen-lrc-line .tran { font-size: clamp(12px, 3.6vw, 16px); }
   .panel-controls-center { gap: 10px; }
   .quality-select-wrap { padding: 5px 9px; }
   .quality-select-inline { font-size: 12px; }
-  .panel-volume-inline { min-width: 116px; }
+  .fullscreen-progress { width: min(94%, 680px); }
 }
 </style>

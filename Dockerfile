@@ -17,7 +17,12 @@ RUN go mod download
 
 COPY backend/. .
 ARG TARGETARCH=amd64
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build -o /app/server ./cmd/server
+ARG APP_VERSION=dev
+ARG APP_COMMIT=unknown
+ARG APP_BUILD_TIME=unknown
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} \
+    go build -ldflags="-s -w -X main.appVersion=${APP_VERSION} -X main.appCommit=${APP_COMMIT} -X main.appBuildTime=${APP_BUILD_TIME}" \
+    -o /app/server ./cmd/server
 
 FROM alpine:3.20
 WORKDIR /app/backend

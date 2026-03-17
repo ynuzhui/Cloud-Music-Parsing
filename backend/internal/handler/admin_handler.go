@@ -141,8 +141,58 @@ func (h *AdminHandler) AddCookie(c *gin.Context) {
 
 	if req.Provider == "netease" {
 		_, _ = h.verifyAndPersistCookie(c.Request.Context(), &row)
+		h.parseService.InvalidateCookiePool()
 	}
 	util.OK(c, gin.H{"id": row.ID})
+}
+
+func (h *AdminHandler) CookieQRCodeKey(c *gin.Context) {
+	result, err := h.parseService.GetNeteaseQRCodeKey(c.Request.Context())
+	if err != nil {
+		util.Err(c, http.StatusBadGateway, err.Error())
+		return
+	}
+	unikey := strings.TrimSpace(result.Unikey)
+	util.OK(c, gin.H{
+		"code":   result.Code,
+		"unikey": unikey,
+		"qr_url": "https://music.163.com/login?codekey=" + unikey,
+	})
+}
+
+func (h *AdminHandler) CookieQRCodeCheck(c *gin.Context) {
+	var req struct {
+		Key string `json:"key"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		util.Err(c, http.StatusBadRequest, "请求参数格式错误")
+		return
+	}
+	key := strings.TrimSpace(req.Key)
+	if key == "" {
+		util.Err(c, http.StatusBadRequest, "二维码 key 不能为空")
+		return
+	}
+
+	result, err := h.parseService.CheckNeteaseQRCode(c.Request.Context(), key)
+	if err != nil {
+		util.Err(c, http.StatusBadGateway, err.Error())
+		return
+	}
+
+	resp := gin.H{
+		"code":       result.Code,
+		"message":    strings.TrimSpace(result.Message),
+		"nickname":   strings.TrimSpace(result.Nickname),
+		"avatar_url": strings.TrimSpace(result.AvatarURL),
+	}
+	if result.Code == 803 {
+		if musicU := h.parseService.ExtractMusicU(result.Cookie); musicU != "" {
+			resp["music_u"] = musicU
+			resp["cookie"] = "MUSIC_U=" + musicU
+		}
+	}
+	util.OK(c, resp)
 }
 
 func (h *AdminHandler) ListCookies(c *gin.Context) {
@@ -256,6 +306,9 @@ func (h *AdminHandler) UpdateCookie(c *gin.Context) {
 	if valueChanged && row.Provider == "netease" {
 		_, _ = h.verifyAndPersistCookie(c.Request.Context(), &row)
 	}
+	if row.Provider == "netease" {
+		h.parseService.InvalidateCookiePool()
+	}
 	util.OK(c, gin.H{"updated": true})
 }
 
@@ -269,6 +322,7 @@ func (h *AdminHandler) DeleteCookie(c *gin.Context) {
 		util.Err(c, http.StatusInternalServerError, err.Error())
 		return
 	}
+	h.parseService.InvalidateCookiePool()
 	util.OK(c, gin.H{"deleted": true})
 }
 
@@ -294,6 +348,7 @@ func (h *AdminHandler) VerifyCookie(c *gin.Context) {
 		util.Err(c, http.StatusInternalServerError, verifyErr.Error())
 		return
 	}
+	h.parseService.InvalidateCookiePool()
 	util.OK(c, gin.H{
 		"id":            row.ID,
 		"status":        row.Status,
@@ -328,6 +383,7 @@ func (h *AdminHandler) VerifyAllCookies(c *gin.Context) {
 			invalid++
 		}
 	}
+	h.parseService.InvalidateCookiePool()
 	util.OK(c, gin.H{
 		"total":   len(rows),
 		"valid":   valid,

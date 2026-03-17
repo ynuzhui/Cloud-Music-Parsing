@@ -69,6 +69,21 @@ export type VerifyAllCookiesResponse = {
   invalid: number;
 };
 
+export type CookieQrKeyResponse = {
+  code: number;
+  unikey: string;
+  qr_url: string;
+};
+
+export type CookieQrCheckResponse = {
+  code: number;
+  message: string;
+  nickname?: string;
+  avatar_url?: string;
+  cookie?: string;
+  music_u?: string;
+};
+
 export type SystemSettings = {
   site: {
     name: string;
@@ -82,6 +97,7 @@ export type SystemSettings = {
     register_email_verify: boolean;
     default_parse_quality: "standard" | "exhigh" | "lossless" | "hires" | "sky" | "jyeffect" | "jymaster";
     parse_require_login: boolean;
+    parse_auto_play: boolean;
     default_daily_parse_limit: number;
     default_concurrency_limit: number;
     cookie_auto_verify: boolean;
@@ -156,6 +172,14 @@ export function verifyCookie(id: number) {
 
 export function verifyAllCookies() {
   return http.post<never, VerifyAllCookiesResponse>("/api/dashboard/cookies/verify-all");
+}
+
+export function getCookieQrKey() {
+  return http.get<never, CookieQrKeyResponse>("/api/dashboard/cookies/qr/key");
+}
+
+export function checkCookieQrStatus(key: string) {
+  return http.post<{ key: string }, CookieQrCheckResponse>("/api/dashboard/cookies/qr/check", { key });
 }
 
 export type UserListResult = {

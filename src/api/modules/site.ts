@@ -9,6 +9,7 @@ export type PublicSiteSettings = {
   allow_register: boolean;
   register_email_verify: boolean;
   parse_require_login: boolean;
+  parse_auto_play: boolean;
   captcha?: {
     enabled: boolean;
     provider: "geetest" | "cloudflare";

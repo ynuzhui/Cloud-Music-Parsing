@@ -13,13 +13,21 @@ import (
 
 	"go-music-aggregator/backend/internal/model"
 	"go-music-aggregator/backend/internal/util"
+
+	"gorm.io/gorm"
 )
 
 const (
 	CookieStatusUnknown = "unknown"
 	CookieStatusValid   = "valid"
 	CookieStatusInvalid = "invalid"
+	cookiePoolTTL       = 45 * time.Second
 )
+
+type activeCookieItem struct {
+	ID     uint
+	MusicU string
+}
 
 type CookieVerifyResult struct {
 	Valid       bool   `json:"valid"`
@@ -183,33 +191,79 @@ func extractMusicUFromRaw(raw string) string {
 }
 
 func (s *ParseService) pickActiveCookie() string {
-	rows := make([]model.Cookie, 0)
-	if err := s.db.Where("provider = ? AND active = ? AND status = ?", "netease", true, CookieStatusValid).Find(&rows).Error; err != nil {
+	now := time.Now()
+	s.cookieMu.Lock()
+	defer s.cookieMu.Unlock()
+
+	if len(s.cookiePool) == 0 || now.After(s.cookiePoolExp) {
+		s.refreshActiveCookiePoolLocked(now)
+	}
+	if len(s.cookiePool) == 0 {
 		return ""
 	}
-	if len(rows) == 0 {
-		if err := s.db.Where("provider = ? AND active = ?", "netease", true).Find(&rows).Error; err != nil || len(rows) == 0 {
-			return ""
+
+	idx := s.cookieCursor % len(s.cookiePool)
+	picked := s.cookiePool[idx]
+	s.cookieCursor = (idx + 1) % len(s.cookiePool)
+	s.touchCookieUsage(picked.ID, now)
+	return picked.MusicU
+}
+
+func (s *ParseService) InvalidateCookiePool() {
+	s.cookieMu.Lock()
+	s.cookiePool = nil
+	s.cookieCursor = 0
+	s.cookiePoolExp = time.Time{}
+	s.cookieMu.Unlock()
+}
+
+func (s *ParseService) refreshActiveCookiePoolLocked(now time.Time) {
+	rows := make([]model.Cookie, 0)
+	if err := s.db.Where("provider = ? AND active = ? AND status = ?", "netease", true, CookieStatusValid).Order("id asc").Find(&rows).Error; err != nil || len(rows) == 0 {
+		rows = rows[:0]
+		if err := s.db.Where("provider = ? AND active = ?", "netease", true).Order("id asc").Find(&rows).Error; err != nil || len(rows) == 0 {
+			s.cookiePool = nil
+			s.cookieCursor = 0
+			s.cookiePoolExp = now.Add(cookiePoolTTL)
+			return
 		}
 	}
 
-	row := rows[util.RandomInt(len(rows))]
-	plain, err := s.box.Decrypt(row.ValueEncrypted)
-	if err != nil {
-		return ""
-	}
-	musicU := extractMusicUFromRaw(plain)
-	if musicU == "" {
-		musicU = strings.TrimSpace(plain)
-	}
-	if musicU == "" {
-		return ""
+	items := make([]activeCookieItem, 0, len(rows))
+	for _, row := range rows {
+		plain, err := s.box.Decrypt(row.ValueEncrypted)
+		if err != nil {
+			continue
+		}
+		musicU := extractMusicUFromRaw(plain)
+		if musicU == "" {
+			musicU = strings.TrimSpace(plain)
+		}
+		musicU = strings.TrimSpace(musicU)
+		if musicU == "" {
+			continue
+		}
+		items = append(items, activeCookieItem{
+			ID:     row.ID,
+			MusicU: musicU,
+		})
 	}
 
-	now := time.Now()
-	_ = s.db.Model(&model.Cookie{}).Where("id = ?", row.ID).Updates(map[string]any{
-		"call_count":   row.CallCount + 1,
-		"last_used_at": &now,
+	s.cookiePool = items
+	if len(items) == 0 {
+		s.cookieCursor = 0
+	} else if s.cookieCursor >= len(items) {
+		s.cookieCursor = 0
+	}
+	s.cookiePoolExp = now.Add(cookiePoolTTL)
+}
+
+func (s *ParseService) touchCookieUsage(id uint, at time.Time) {
+	if id == 0 {
+		return
+	}
+	_ = s.db.Model(&model.Cookie{}).Where("id = ?", id).Updates(map[string]any{
+		"call_count":   gorm.Expr("call_count + 1"),
+		"last_used_at": &at,
 	}).Error
-	return musicU
 }

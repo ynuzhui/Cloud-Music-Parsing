@@ -25,6 +25,7 @@ type FeatureSettings struct {
 	RegisterEmailVerify bool   `json:"register_email_verify"`
 	DefaultParseQuality string `json:"default_parse_quality"`
 	ParseRequireLogin   bool   `json:"parse_require_login"`
+	ParseAutoPlay       bool   `json:"parse_auto_play"`
 	DefaultDailyLimit   int    `json:"default_daily_parse_limit"`
 	DefaultConcurrency  int    `json:"default_concurrency_limit"`
 	CookieAutoVerify    bool   `json:"cookie_auto_verify"`
@@ -139,6 +140,7 @@ func (s *SettingService) Save(settings SystemSettings) error {
 		{"register_email_verify", strconv.FormatBool(settings.Feature.RegisterEmailVerify), false},
 		{"default_parse_quality", normalizeQuality(settings.Feature.DefaultParseQuality, "standard"), false},
 		{"parse_require_login", strconv.FormatBool(settings.Feature.ParseRequireLogin), false},
+		{"parse_auto_play", strconv.FormatBool(settings.Feature.ParseAutoPlay), false},
 		{"default_daily_parse_limit", strconv.Itoa(nonNegative(settings.Feature.DefaultDailyLimit)), false},
 		{"default_concurrency_limit", strconv.Itoa(nonNegative(settings.Feature.DefaultConcurrency)), false},
 		{"cookie_auto_verify", strconv.FormatBool(settings.Feature.CookieAutoVerify), false},
@@ -189,6 +191,7 @@ func (s *SettingService) Load() (SystemSettings, error) {
 		Feature: FeatureSettings{
 			DefaultParseQuality: "standard",
 			ParseRequireLogin:   true,
+			ParseAutoPlay:       true,
 			DefaultDailyLimit:   100,
 			DefaultConcurrency:  2,
 		},
@@ -256,6 +259,7 @@ func (s *SettingService) Load() (SystemSettings, error) {
 		defaults.Feature.DefaultParseQuality,
 	)
 	settings.Feature.ParseRequireLogin = getBool("parse_require_login", defaults.Feature.ParseRequireLogin)
+	settings.Feature.ParseAutoPlay = getBool("parse_auto_play", defaults.Feature.ParseAutoPlay)
 	settings.Feature.DefaultDailyLimit = getInt("default_daily_parse_limit", defaults.Feature.DefaultDailyLimit)
 	settings.Feature.DefaultConcurrency = getInt("default_concurrency_limit", defaults.Feature.DefaultConcurrency)
 	settings.Feature.CookieAutoVerify = getBool("cookie_auto_verify", false)

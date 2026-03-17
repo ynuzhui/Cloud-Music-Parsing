@@ -30,6 +30,7 @@ const featureForm = reactive({
   register_email_verify: false,
   default_parse_quality: "standard" as "standard" | "exhigh" | "lossless" | "hires" | "sky" | "jyeffect" | "jymaster",
   parse_require_login: true,
+  parse_auto_play: true,
   default_daily_parse_limit: 100,
   default_concurrency_limit: 2,
   cookie_auto_verify: false,
@@ -147,6 +148,7 @@ async function loadSettings() {
     Object.assign(featureForm, data.feature);
     featureForm.default_parse_quality = data.feature?.default_parse_quality || "standard";
     featureForm.parse_require_login = data.feature?.parse_require_login ?? true;
+    featureForm.parse_auto_play = data.feature?.parse_auto_play ?? true;
     featureForm.default_daily_parse_limit = Number(data.feature?.default_daily_parse_limit ?? 100);
     featureForm.default_concurrency_limit = Number(data.feature?.default_concurrency_limit ?? 2);
     Object.assign(captchaForm, {
@@ -258,6 +260,9 @@ onBeforeUnmount(() => {
             </n-form-item>
             <n-form-item label="是否必须登录后解析">
               <n-switch v-model:value="featureForm.parse_require_login" />
+            </n-form-item>
+            <n-form-item label="解析成功后自动播放">
+              <n-switch v-model:value="featureForm.parse_auto_play" />
             </n-form-item>
             <n-form-item label="Cookie 自动校验">
               <n-switch :value="featureForm.cookie_auto_verify" @update:value="onCookieAutoVerifyChange" />

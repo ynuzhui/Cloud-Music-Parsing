@@ -60,6 +60,97 @@ export function fetchLyric(id: string) {
   return http.post<never, LyricResult>("/api/music/lyric", { id });
 }
 
+export type CommentItem = {
+  id: number;
+  content: string;
+  time: number;
+  liked_count: number;
+  reply_count: number;
+  user_id: number;
+  user_nickname: string;
+  user_avatar_url: string;
+};
+
+export type CommentPageResult = {
+  total: number;
+  has_more: boolean;
+  cursor: string;
+  comments: CommentItem[];
+};
+
+export function fetchComments(params: {
+  id: string;
+  type?: "song" | "mv" | "playlist" | "album" | "dj" | "video";
+  page_no?: number;
+  page_size?: number;
+  sort_type?: 99 | 2 | 3;
+  cursor?: string;
+}) {
+  return http.post<never, CommentPageResult>("/api/music/comment", params);
+}
+
+export type RecommendedPlaylistItem = {
+  id: number;
+  name: string;
+  cover_url: string;
+  track_count: number;
+  play_count: number;
+  copywriter: string;
+  creator: string;
+};
+
+export function fetchRecommendedPlaylists(limit = 30) {
+  return http.post<never, RecommendedPlaylistItem[]>("/api/music/recommend/playlist", { limit });
+}
+
+export type ToplistItem = {
+  id: number;
+  name: string;
+  cover_url: string;
+  update_frequency: string;
+  track_count: number;
+  play_count: number;
+  tracks_preview: string[];
+};
+
+export type ToplistDetailResult = {
+  id: number;
+  name: string;
+  cover_url: string;
+  tracks: PlaylistTrack[];
+};
+
+export function fetchToplist(id?: string) {
+  return http.post<never, ToplistItem[] | ToplistDetailResult>("/api/music/toplist", id ? { id } : {});
+}
+
+export type ArtistItem = {
+  id: number;
+  name: string;
+  cover_url: string;
+  album_size: number;
+  music_size: number;
+  mv_size: number;
+  trans_names: string[];
+};
+
+export type ArtistListResult = {
+  more: boolean;
+  artists: ArtistItem[];
+};
+
+export type ArtistDetailResult = {
+  id: number;
+  name: string;
+  cover_url: string;
+  brief: string;
+  songs: PlaylistTrack[];
+};
+
+export function fetchArtist(params?: { id?: string; limit?: number; offset?: number }) {
+  return http.post<never, ArtistListResult | ArtistDetailResult>("/api/music/artist", params ?? {});
+}
+
 export function getProviders() {
   return http.get<never, { providers: Array<{ id: string; name: string; description: string }> }>("/api/music/providers");
 }

@@ -32,6 +32,7 @@ func (h *PublicHandler) Site(c *gin.Context) {
 		"allow_register":        settings.Feature.AllowRegister,
 		"register_email_verify": settings.Feature.RegisterEmailVerify,
 		"parse_require_login":   settings.Feature.ParseRequireLogin,
+		"parse_auto_play":       settings.Feature.ParseAutoPlay,
 		"captcha": gin.H{
 			"enabled":             settings.Captcha.Enabled,
 			"provider":            settings.Captcha.Provider,

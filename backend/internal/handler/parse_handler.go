@@ -141,6 +141,107 @@ func (h *ParseHandler) GetLyric(c *gin.Context) {
 	util.OK(c, lyric)
 }
 
+func (h *ParseHandler) GetComments(c *gin.Context) {
+	var req struct {
+		ID       string `json:"id"`
+		Type     string `json:"type"`
+		PageNo   int    `json:"page_no"`
+		PageSize int    `json:"page_size"`
+		SortType int    `json:"sort_type"`
+		Cursor   string `json:"cursor"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		util.Err(c, http.StatusBadRequest, "请求参数格式错误")
+		return
+	}
+	req.ID = strings.TrimSpace(req.ID)
+	if req.ID == "" {
+		util.Err(c, http.StatusBadRequest, "资源 ID 不能为空")
+		return
+	}
+
+	result, err := h.parseService.FetchComments(
+		c.Request.Context(),
+		req.Type,
+		req.ID,
+		req.PageNo,
+		req.PageSize,
+		req.SortType,
+		req.Cursor,
+	)
+	if err != nil {
+		util.Err(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	util.OK(c, result)
+}
+
+func (h *ParseHandler) RecommendPlaylists(c *gin.Context) {
+	var req struct {
+		Limit int `json:"limit"`
+	}
+	_ = c.ShouldBindJSON(&req)
+
+	result, err := h.parseService.FetchRecommendedPlaylists(c.Request.Context(), req.Limit)
+	if err != nil {
+		util.Err(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	util.OK(c, result)
+}
+
+func (h *ParseHandler) Toplist(c *gin.Context) {
+	var req struct {
+		ID string `json:"id"`
+	}
+	_ = c.ShouldBindJSON(&req)
+	req.ID = strings.TrimSpace(req.ID)
+
+	if req.ID != "" {
+		detail, err := h.parseService.FetchToplistDetail(c.Request.Context(), req.ID)
+		if err != nil {
+			util.Err(c, http.StatusBadRequest, err.Error())
+			return
+		}
+		util.OK(c, detail)
+		return
+	}
+
+	items, err := h.parseService.FetchToplist(c.Request.Context())
+	if err != nil {
+		util.Err(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	util.OK(c, items)
+}
+
+func (h *ParseHandler) Artist(c *gin.Context) {
+	var req struct {
+		ID     string `json:"id"`
+		Limit  int    `json:"limit"`
+		Offset int    `json:"offset"`
+	}
+	_ = c.ShouldBindJSON(&req)
+	req.ID = strings.TrimSpace(req.ID)
+
+	if req.ID != "" {
+		detail, err := h.parseService.FetchArtistDetail(c.Request.Context(), req.ID)
+		if err != nil {
+			util.Err(c, http.StatusBadRequest, err.Error())
+			return
+		}
+		util.OK(c, detail)
+		return
+	}
+
+	list, err := h.parseService.FetchArtists(c.Request.Context(), req.Limit, req.Offset)
+	if err != nil {
+		util.Err(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	util.OK(c, list)
+}
+
 func (h *ParseHandler) DownloadLyric(c *gin.Context) {
 	var req struct {
 		ID string `json:"id"`

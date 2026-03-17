@@ -39,6 +39,7 @@ func NewCookieAutoVerifyJob(
 }
 
 func (j *CookieAutoVerifyJob) Run(ctx context.Context) {
+	log.Printf("[任务:Cookie自动校验] 调度器已启动（北京时间 00:00 / 06:00 / 12:00 / 18:00）")
 	for {
 		now := util.NowBeijing()
 		nextRun := nextCookieVerifyRun(now)
@@ -46,11 +47,13 @@ func (j *CookieAutoVerifyJob) Run(ctx context.Context) {
 		if wait < time.Second {
 			wait = time.Second
 		}
+		log.Printf("[任务:Cookie自动校验] 下一次执行时间: %s", nextRun.Format("2006-01-02 15:04:05"))
 
 		timer := time.NewTimer(wait)
 		select {
 		case <-ctx.Done():
 			timer.Stop()
+			log.Printf("[任务:Cookie自动校验] 调度器已停止")
 			return
 		case <-timer.C:
 			j.runOnce(ctx)
@@ -73,25 +76,28 @@ func nextCookieVerifyRun(now time.Time) time.Time {
 }
 
 func (j *CookieAutoVerifyJob) runOnce(ctx context.Context) {
+	log.Printf("[任务:Cookie自动校验] 开始执行自动校验")
 	settings, err := j.settingService.Load()
 	if err != nil {
-		log.Printf("[cookie-auto-verify] 加载配置失败: %v", err)
+		log.Printf("[任务:Cookie自动校验] 加载配置失败: %v", err)
 		return
 	}
 	if !settings.Feature.CookieAutoVerify {
+		log.Printf("[任务:Cookie自动校验] 功能未开启，本次跳过")
 		return
 	}
 	if j.mailService == nil {
-		log.Printf("[cookie-auto-verify] 邮件服务未初始化，跳过告警发送")
+		log.Printf("[任务:Cookie自动校验] 邮件服务未初始化，跳过告警发送")
 		return
 	}
 
 	var rows []model.Cookie
 	if err := j.db.Where("provider = ?", "netease").Order("id DESC").Find(&rows).Error; err != nil {
-		log.Printf("[cookie-auto-verify] 加载 Cookie 列表失败: %v", err)
+		log.Printf("[任务:Cookie自动校验] 加载 Cookie 列表失败: %v", err)
 		return
 	}
 	if len(rows) == 0 {
+		log.Printf("[任务:Cookie自动校验] 未找到网易云 Cookie，本次跳过")
 		return
 	}
 
@@ -119,12 +125,13 @@ func (j *CookieAutoVerifyJob) runOnce(ctx context.Context) {
 	}
 
 	if invalidCount == 0 && errorCount == 0 {
+		log.Printf("[任务:Cookie自动校验] 执行完成：总数=%d，有效=%d，无效=%d，异常=%d", total, validCount, invalidCount, errorCount)
 		return
 	}
 
 	superAdminEmail := j.getSuperAdminEmail()
 	if superAdminEmail == "" {
-		log.Printf("[cookie-auto-verify] 未找到超级管理员邮箱，跳过告警邮件")
+		log.Printf("[任务:Cookie自动校验] 未找到超级管理员邮箱，跳过告警邮件")
 		return
 	}
 
@@ -140,8 +147,11 @@ func (j *CookieAutoVerifyJob) runOnce(ctx context.Context) {
 	)
 
 	if err := j.mailService.SendText(superAdminEmail, subject, body); err != nil {
-		log.Printf("[cookie-auto-verify] 发送告警邮件失败（请先配置 SMTP 服务）: %v", err)
+		log.Printf("[任务:Cookie自动校验] 发送告警邮件失败（请先配置 SMTP 服务）: %v", err)
+	} else {
+		log.Printf("[任务:Cookie自动校验] 告警邮件发送完成（收件人：%s）", superAdminEmail)
 	}
+	log.Printf("[任务:Cookie自动校验] 执行完成：总数=%d，有效=%d，无效=%d，异常=%d", total, validCount, invalidCount, errorCount)
 }
 
 func (j *CookieAutoVerifyJob) getSuperAdminEmail() string {

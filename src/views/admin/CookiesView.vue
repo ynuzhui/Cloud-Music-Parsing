@@ -1,7 +1,17 @@
 ﻿<script setup lang="ts">
-import { h, onMounted, reactive, ref } from "vue";
+import { computed, h, onBeforeUnmount, onMounted, reactive, ref } from "vue";
 import { createDiscreteApi, type DataTableColumns, NButton, NPopconfirm, NSpace, NSwitch, NTag } from "naive-ui";
-import { createCookie, deleteCookie, listCookies, updateCookie, verifyAllCookies, verifyCookie, type CookieItem } from "@/api/modules/admin";
+import {
+  checkCookieQrStatus,
+  createCookie,
+  deleteCookie,
+  getCookieQrKey,
+  listCookies,
+  updateCookie,
+  verifyAllCookies,
+  verifyCookie,
+  type CookieItem,
+} from "@/api/modules/admin";
 
 const { message } = createDiscreteApi(["message"]);
 
@@ -11,8 +21,18 @@ const verifyingAll = ref(false);
 const showCreate = ref(false);
 const showEdit = ref(false);
 const showView = ref(false);
+const showQrCreate = ref(false);
 const rows = ref<CookieItem[]>([]);
 const viewingCookie = ref("");
+const qrUnikey = ref("");
+const qrLoginUrl = ref("");
+const qrStatusCode = ref(801);
+const qrNickname = ref("");
+const qrAvatar = ref("");
+const qrLoading = ref(false);
+const qrChecking = ref(false);
+const qrSaving = ref(false);
+let qrTimer: ReturnType<typeof setInterval> | null = null;
 
 const form = reactive({
   provider: "netease",
@@ -30,6 +50,13 @@ const statusLabelMap: Record<string, string> = {
   valid: "有效",
   invalid: "无效",
 };
+const qrStatusLabelMap: Record<number, string> = {
+  800: "二维码已过期，正在刷新...",
+  801: "请使用网易云音乐 App 扫码登录",
+  802: "扫码成功，请在手机端确认登录",
+  803: "登录成功，正在保存 Cookie...",
+};
+const qrStatusText = computed(() => qrStatusLabelMap[qrStatusCode.value] || "等待扫码...");
 
 function formatTime(raw: string | null): string {
   if (!raw) return "-";
@@ -78,6 +105,100 @@ function summarizeCookie(raw: string): string {
   if (!text) return "-";
   if (text.length <= 26) return text;
   return `${text.slice(0, 12)}...${text.slice(-12)}`;
+}
+
+function clearQrTimer() {
+  if (!qrTimer) return;
+  clearInterval(qrTimer);
+  qrTimer = null;
+}
+
+function resetQrState() {
+  qrUnikey.value = "";
+  qrLoginUrl.value = "";
+  qrStatusCode.value = 801;
+  qrNickname.value = "";
+  qrAvatar.value = "";
+  qrLoading.value = false;
+  qrChecking.value = false;
+  qrSaving.value = false;
+}
+
+async function loadQrKey() {
+  qrLoading.value = true;
+  try {
+    const data = await getCookieQrKey();
+    const key = (data.unikey || "").trim();
+    if (!key) throw new Error("二维码 key 获取失败");
+    qrUnikey.value = key;
+    qrLoginUrl.value = data.qr_url || `https://music.163.com/login?codekey=${key}`;
+    qrStatusCode.value = 801;
+    qrNickname.value = "";
+    qrAvatar.value = "";
+  } finally {
+    qrLoading.value = false;
+  }
+}
+
+async function pollQrStatus() {
+  if (!showQrCreate.value || !qrUnikey.value || qrChecking.value || qrSaving.value) return;
+  qrChecking.value = true;
+  try {
+    const data = await checkCookieQrStatus(qrUnikey.value);
+    const code = Number(data.code) || 801;
+    qrStatusCode.value = code;
+    qrNickname.value = (data.nickname || "").trim();
+    qrAvatar.value = (data.avatar_url || "").trim();
+
+    if (code === 800) {
+      await loadQrKey();
+      return;
+    }
+    if (code !== 803) return;
+
+    qrSaving.value = true;
+    const musicU = extractCookieCore(data.cookie || data.music_u || "");
+    if (!musicU) {
+      message.error("扫码成功，但未获取到 MUSIC_U，请重试");
+      qrSaving.value = false;
+      await loadQrKey();
+      return;
+    }
+
+    const autoLabel = `扫码-${new Date().toISOString().replace(/[:.]/g, "-")}`;
+    await createCookie({ provider: "netease", label: autoLabel, value: musicU, active: true });
+    message.success("扫码添加 Cookie 成功");
+    showQrCreate.value = false;
+    clearQrTimer();
+    resetQrState();
+    await loadRows();
+  } catch (error) {
+    message.error((error as Error).message);
+    qrSaving.value = false;
+  } finally {
+    qrChecking.value = false;
+  }
+}
+
+async function openQrCreateModal() {
+  showQrCreate.value = true;
+  clearQrTimer();
+  resetQrState();
+  try {
+    await loadQrKey();
+  } catch (error) {
+    message.error((error as Error).message);
+    return;
+  }
+  qrTimer = setInterval(() => {
+    void pollQrStatus();
+  }, 1000);
+}
+
+function closeQrCreateModal() {
+  showQrCreate.value = false;
+  clearQrTimer();
+  resetQrState();
 }
 
 const columns: DataTableColumns<CookieItem> = [
@@ -304,6 +425,9 @@ async function onVerifyAll() {
 }
 
 onMounted(loadRows);
+onBeforeUnmount(() => {
+  clearQrTimer();
+});
 </script>
 
 <template>
@@ -316,6 +440,7 @@ onMounted(loadRows);
       <n-space>
         <n-button secondary @click="loadRows">刷新</n-button>
         <n-button secondary :loading="verifyingAll" @click="onVerifyAll">校验全部</n-button>
+        <n-button type="primary" secondary @click="openQrCreateModal">扫码添加</n-button>
         <n-button type="primary" @click="showCreate = true">新增 Cookie</n-button>
       </n-space>
     </header>
@@ -374,6 +499,24 @@ onMounted(loadRows);
 
     <n-modal v-model:show="showView" preset="card" title="查看 Cookie" style="max-width: 720px">
       <div class="cookie-view-text">{{ viewingCookie }}</div>
+    </n-modal>
+
+    <n-modal v-model:show="showQrCreate" preset="card" title="扫码添加 Cookie" style="max-width: 520px" @update:show="(show: boolean) => !show && closeQrCreateModal()">
+      <div class="qr-create-wrap">
+        <div class="qr-code-box">
+          <n-qr-code v-if="qrLoginUrl" :value="qrLoginUrl" :size="220" />
+          <div v-else class="qr-code-loading">二维码加载中...</div>
+        </div>
+        <p class="qr-status">{{ qrStatusText }}</p>
+        <div v-if="qrNickname" class="qr-user">
+          <n-avatar v-if="qrAvatar" round :src="qrAvatar" :size="28" />
+          <span>{{ qrNickname }}</span>
+        </div>
+        <n-space justify="center">
+          <n-button @click="closeQrCreateModal">关闭</n-button>
+          <n-button secondary :loading="qrLoading" @click="loadQrKey">刷新二维码</n-button>
+        </n-space>
+      </div>
     </n-modal>
   </section>
 </template>
@@ -478,6 +621,44 @@ onMounted(loadRows);
   color: var(--text-1);
 }
 
+.qr-create-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 4px 2px;
+}
+
+.qr-code-box {
+  width: 236px;
+  height: 236px;
+  border-radius: 14px;
+  border: 1px solid rgba(20, 41, 78, 0.1);
+  background: rgba(248, 250, 253, 0.86);
+  display: grid;
+  place-items: center;
+}
+
+.qr-code-loading {
+  font-size: 13px;
+  color: var(--text-2);
+}
+
+.qr-status {
+  margin: 0;
+  font-size: 13px;
+  color: var(--text-2);
+  text-align: center;
+}
+
+.qr-user {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-1);
+  font-weight: 600;
+}
+
 @media (max-width: 760px) {
   .title-row {
     flex-direction: column;
@@ -485,5 +666,3 @@ onMounted(loadRows);
   }
 }
 </style>
-
-

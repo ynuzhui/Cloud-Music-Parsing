@@ -10,8 +10,9 @@ import (
 	"os"
 	"os/signal"
 	"path"
-	"strconv"
 	"path/filepath"
+	"runtime"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -44,6 +45,12 @@ const (
 	superUserGroupDesc     = "超级管理员用户组"
 )
 
+var (
+	appVersion   = "dev"
+	appCommit    = "unknown"
+	appBuildTime = "unknown"
+)
+
 func main() {
 	util.ForceBeijingTimezone()
 	backendHTTPPort := resolveBackendHTTPPort()
@@ -58,23 +65,32 @@ func main() {
 	var prevDB *gorm.DB
 
 	for {
+		logStartupBootstrap(envFilePath, distPath, backendHTTPPort)
 		runtimeCtx, runtimeCancel := context.WithCancel(context.Background())
+		logInitStart("配置加载")
 		cfg, err := config.Load(envFilePath)
 		if err != nil {
-			log.Fatalf("load config failed: %v", err)
+			log.Fatalf("❌ 配置加载失败: %v", err)
 		}
+		logInitDone("配置加载")
 
+		logInitStart("安装状态与限流器")
 		state := middleware.NewInstallState(cfg.InstallDone)
 		rateLimit, rateWindow := resolveRateLimitConfig()
 		limiter := middleware.NewMemoryRateLimiter(rateLimit, rateWindow)
+		log.Printf("✅ 安装状态与限流器初始化完成（已安装=%t，限流=%d 次/%s）", cfg.InstallDone, rateLimit, rateWindow)
 
+		logInitStart("HTTP 路由引擎")
 		router := gin.New()
 		router.Use(gin.Recovery())
 		router.Use(gin.Logger())
 		router.Use(middleware.NoCacheAPI())
+		logInitDone("HTTP 路由引擎")
 
+		logInitStart("安装向导服务")
 		installSvc := service.NewInstallService(cfg.EnvFile)
 		installHandler := handler.NewInstallHandler(state, installSvc, cfg.AutoRestartInstall, restartCh)
+		logInitDone("安装向导服务")
 
 		router.GET("/api/health", func(c *gin.Context) {
 			util.OK(c, gin.H{
@@ -88,12 +104,15 @@ func main() {
 			installRoutes.POST("/test-db", limiter.Middleware(), installHandler.TestConnection)
 			installRoutes.POST("/complete", limiter.Middleware(), installHandler.Complete)
 		}
+		log.Printf("✅ 安装路由注册完成（/api/install）")
 
 		if cfg.InstallDone {
+			logInitStart("已安装模块与业务路由")
 			db, mountErr := mountInstalledRoutes(runtimeCtx, router, cfg, limiter, state)
 			if mountErr != nil {
-				log.Fatalf("mount installed routes failed: %v", mountErr)
+				log.Fatalf("❌ 已安装模块挂载失败: %v", mountErr)
 			}
+			logInitDone("已安装模块与业务路由")
 			// Close previous DB connection pool on restart
 			if prevDB != nil {
 				if sqlDB, err := prevDB.DB(); err == nil {
@@ -105,8 +124,12 @@ func main() {
 			router.Any("/api/auth/*path", notInstalled)
 			router.Any("/api/music/*path", notInstalled)
 			router.Any("/api/dashboard/*path", notInstalled)
+			log.Printf("ℹ️ 系统未安装，仅开放安装与健康检查路由")
 		}
+		logInitStart("前端静态资源路由")
 		mountFrontendRoutes(router, distPath, state)
+		logInitDone("前端静态资源路由")
+		logStartupSummary(cfg, backendHTTPPort)
 
 		srv := &http.Server{
 			Addr:              ":" + backendHTTPPort,
@@ -118,22 +141,22 @@ func main() {
 		}
 
 		go func() {
-			log.Printf("backend listening on :%s", backendHTTPPort)
+			log.Printf("🌐 后端服务监听地址: :%s", backendHTTPPort)
 			if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-				log.Fatalf("server run failed: %v", err)
+				log.Fatalf("❌ 服务运行失败: %v", err)
 			}
 		}()
 
 		// Block until restart or OS signal
 		select {
 		case <-restartCh:
-			log.Println("received restart signal, shutting down...")
+			log.Println("🔄 收到重启信号，正在优雅关闭服务...")
 		case sig := <-sigCh:
-			log.Printf("received signal %v, shutting down...", sig)
+			log.Printf("🛑 收到系统信号 %v，正在优雅关闭服务...", sig)
 			runtimeCancel()
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			if err := srv.Shutdown(ctx); err != nil {
-				log.Printf("server shutdown error: %v", err)
+				log.Printf("⚠️ 服务关闭异常: %v", err)
 			}
 			cancel()
 			if prevDB != nil {
@@ -147,16 +170,46 @@ func main() {
 		runtimeCancel()
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		if err := srv.Shutdown(ctx); err != nil {
-			log.Printf("server shutdown error: %v", err)
+			log.Printf("⚠️ 服务关闭异常: %v", err)
 		}
 		cancel()
 
 		if exitForExternalRestart {
-			log.Println("running as pid 1, exiting process for external restart")
+			log.Println("♻️ 当前进程为 PID 1，已退出以便由外部编排系统拉起新实例")
 			return
 		}
-		log.Println("reloading configuration and restarting server...")
+		log.Println("🔁 正在重载配置并重新启动服务...")
 	}
+}
+
+func logInitStart(name string) {
+	log.Printf("[DEBUG] 正在初始化 %s...", name)
+}
+
+func logInitDone(name string) {
+	log.Printf("[DEBUG] %s 初始化完成", name)
+}
+
+func logStartupBootstrap(envFilePath, distPath, backendHTTPPort string) {
+	log.Println("========================================")
+	log.Println("🚀 云音解析后端启动中...")
+	log.Printf("📍 环境文件: %s", envFilePath)
+	log.Printf("📁 前端目录: %s", distPath)
+	log.Printf("🧷 监听端口: %s", backendHTTPPort)
+}
+
+func logStartupSummary(cfg config.Config, backendHTTPPort string) {
+	log.Println("========================================")
+	log.Println("✅ 初始化阶段全部完成")
+	log.Printf("📦 版本: %s", appVersion)
+	log.Printf("📝 Commit: %s", appCommit)
+	log.Printf("📅 构建时间: %s", appBuildTime)
+	log.Printf("🐹 Go 版本: %s", runtime.Version())
+	log.Printf("⚙️ 运行模式: %s", gin.Mode())
+	log.Printf("🗄️ 数据库驱动: %s", strings.ToUpper(cfg.DBDriver))
+	log.Printf("🧱 安装状态: %t", cfg.InstallDone)
+	log.Printf("🌐 服务地址: :%s", backendHTTPPort)
+	log.Println("========================================")
 }
 
 func resolveBackendHTTPPort() string {
@@ -274,48 +327,130 @@ func dirExists(p string) bool {
 }
 
 func mountInstalledRoutes(runtimeCtx context.Context, router *gin.Engine, cfg config.Config, limiter *middleware.MemoryRateLimiter, state *middleware.InstallState) (*gorm.DB, error) {
+	logInitStart("数据库连接")
 	db, err := database.Open(cfg)
 	if err != nil {
+		log.Printf("❌ 数据库连接失败: %v", err)
 		return nil, err
 	}
-	if err := database.AutoMigrate(db); err != nil {
-		return nil, err
-	}
-	if err := ensureFixedSuperAdmin(db); err != nil {
-		return nil, err
-	}
-	if err := ensureBuiltinUserGroups(db); err != nil {
-		return nil, err
-	}
+	logInitDone("数据库连接")
 
+	logInitStart("数据库自动迁移")
+	if err := database.AutoMigrate(db); err != nil {
+		log.Printf("❌ 数据库自动迁移失败: %v", err)
+		return nil, err
+	}
+	logInitDone("数据库自动迁移")
+
+	logInitStart("固定超级管理员校验")
+	if err := ensureFixedSuperAdmin(db); err != nil {
+		log.Printf("❌ 固定超级管理员校验失败: %v", err)
+		return nil, err
+	}
+	logInitDone("固定超级管理员校验")
+
+	logInitStart("内置用户组校验")
+	if err := ensureBuiltinUserGroups(db); err != nil {
+		log.Printf("❌ 内置用户组校验失败: %v", err)
+		return nil, err
+	}
+	logInitDone("内置用户组校验")
+
+	logInitStart("SecretBox")
 	box, err := security.NewSecretBox(cfg.MasterKey)
 	if err != nil {
+		log.Printf("❌ SecretBox 初始化失败: %v", err)
 		return nil, err
 	}
+	logInitDone("SecretBox")
+
+	logInitStart("JWT 管理器")
 	jwtMgr := security.NewJWTManager(cfg.JWTSecret, cfg.JWTIssuer)
+	logInitDone("JWT 管理器")
+
+	logInitStart("SettingService")
 	settingSvc := service.NewSettingService(db, box)
+	logInitDone("SettingService")
+
+	logInitStart("ParseService")
 	parseSvc := service.NewParseService(db, settingSvc, box)
+	logInitDone("ParseService")
+
+	logInitStart("StatsService")
 	statsSvc := service.NewStatsService(db)
+	logInitDone("StatsService")
+
+	logInitStart("QuotaService")
 	quotaSvc := service.NewQuotaService(db, settingSvc)
+	logInitDone("QuotaService")
+
+	logInitStart("CaptchaService")
 	captchaSvc := service.NewCaptchaService(settingSvc)
+	logInitDone("CaptchaService")
+
+	logInitStart("MailService")
 	mailSvc := service.NewMailService(settingSvc)
+	logInitDone("MailService")
+
+	logInitStart("EmailCodeService")
 	emailCodeSvc := service.NewEmailCodeService(db, mailSvc)
+	logInitDone("EmailCodeService")
+
+	logInitStart("CookieAutoVerifyJob")
 	cookieAutoVerifyJob := service.NewCookieAutoVerifyJob(db, box, parseSvc, settingSvc, mailSvc)
-	_ = parseSvc.RefreshCacheBackend(runtimeCtx)
+	logInitDone("CookieAutoVerifyJob")
+
+	logInitStart("ParseService 缓存后端刷新")
+	if err := parseSvc.RefreshCacheBackend(runtimeCtx); err != nil {
+		log.Printf("⚠️ ParseService 缓存后端刷新失败: %v", err)
+	} else {
+		logInitDone("ParseService 缓存后端刷新")
+	}
+
+	logInitStart("Cookie 自动校验后台任务")
 	go cookieAutoVerifyJob.Run(runtimeCtx)
+	logInitDone("Cookie 自动校验后台任务")
+
+	logInitStart("CleanupJob")
 	cleanupJob := service.NewCleanupJob(db)
+	logInitDone("CleanupJob")
+
+	logInitStart("数据清理后台任务")
 	go cleanupJob.Run(runtimeCtx)
+	logInitDone("数据清理后台任务")
+
+	logInitStart("PublicHandler")
 	publicHandler := handler.NewPublicHandler(settingSvc)
+	logInitDone("PublicHandler")
 
+	logInitStart("审计日志中间件")
 	router.Use(middleware.AuditLog(db))
+	logInitDone("审计日志中间件")
+
 	router.GET("/api/site", middleware.RequireInstalled(state), publicHandler.Site)
+	log.Printf("✅ 公共站点路由注册完成（/api/site）")
 
+	logInitStart("AuthHandler")
 	authHandler := handler.NewAuthHandler(db, jwtMgr, settingSvc, captchaSvc, emailCodeSvc)
-	parseHandler := handler.NewParseHandler(parseSvc, quotaSvc)
-	adminHandler := handler.NewAdminHandler(db, box, settingSvc, statsSvc, parseSvc, mailSvc)
-	userAdminHandler := handler.NewUserAdminHandler(db)
-	userHandler := handler.NewUserHandler(db, quotaSvc)
+	logInitDone("AuthHandler")
 
+	logInitStart("ParseHandler")
+	parseHandler := handler.NewParseHandler(parseSvc, quotaSvc)
+	logInitDone("ParseHandler")
+
+	logInitStart("AdminHandler")
+	adminHandler := handler.NewAdminHandler(db, box, settingSvc, statsSvc, parseSvc, mailSvc)
+	logInitDone("AdminHandler")
+
+	logInitStart("UserAdminHandler")
+	userAdminHandler := handler.NewUserAdminHandler(db)
+	logInitDone("UserAdminHandler")
+
+	logInitStart("UserHandler")
+	userHandler := handler.NewUserHandler(db, quotaSvc)
+	logInitDone("UserHandler")
+
+	logInitStart("认证路由")
 	authRoutes := router.Group("/api/auth")
 	authRoutes.Use(middleware.RequireInstalled(state))
 	{
@@ -325,7 +460,9 @@ func mountInstalledRoutes(runtimeCtx context.Context, router *gin.Engine, cfg co
 		authRoutes.GET("/me", middleware.JWTAuth(jwtMgr, db), userHandler.Me)
 		authRoutes.POST("/refresh", middleware.JWTAuth(jwtMgr, db), authHandler.RefreshToken)
 	}
+	logInitDone("认证路由")
 
+	logInitStart("音乐路由")
 	musicRoutes := router.Group("/api/music")
 	musicRoutes.Use(middleware.RequireInstalled(state), middleware.OptionalJWTAuth(jwtMgr, db, settingSvc))
 	{
@@ -334,10 +471,16 @@ func mountInstalledRoutes(runtimeCtx context.Context, router *gin.Engine, cfg co
 		musicRoutes.POST("/search", limiter.Middleware(), parseHandler.SearchSong)
 		musicRoutes.POST("/playlist", limiter.Middleware(), parseHandler.PlaylistDetail)
 		musicRoutes.POST("/lyric", limiter.Middleware(), parseHandler.GetLyric)
+		musicRoutes.POST("/comment", limiter.Middleware(), parseHandler.GetComments)
+		musicRoutes.POST("/recommend/playlist", limiter.Middleware(), parseHandler.RecommendPlaylists)
+		musicRoutes.POST("/toplist", limiter.Middleware(), parseHandler.Toplist)
+		musicRoutes.POST("/artist", limiter.Middleware(), parseHandler.Artist)
 		musicRoutes.POST("/lyric/download", limiter.Middleware(), parseHandler.DownloadLyric)
 		musicRoutes.POST("/cover/download", limiter.Middleware(), parseHandler.DownloadCover)
 	}
+	logInitDone("音乐路由")
 
+	logInitStart("后台管理路由")
 	adminRoutes := router.Group("/api/dashboard")
 	adminRoutes.Use(middleware.RequireInstalled(state), middleware.JWTAuth(jwtMgr, db), middleware.AdminOnly())
 	{
@@ -346,6 +489,8 @@ func mountInstalledRoutes(runtimeCtx context.Context, router *gin.Engine, cfg co
 		adminRoutes.PUT("/settings", adminHandler.SaveSettings)
 		adminRoutes.POST("/cookies", adminHandler.AddCookie)
 		adminRoutes.GET("/cookies", adminHandler.ListCookies)
+		adminRoutes.GET("/cookies/qr/key", adminHandler.CookieQRCodeKey)
+		adminRoutes.POST("/cookies/qr/check", adminHandler.CookieQRCodeCheck)
 		adminRoutes.POST("/cookies/verify-all", adminHandler.VerifyAllCookies)
 		adminRoutes.POST("/cookies/:id/verify", adminHandler.VerifyCookie)
 		adminRoutes.PATCH("/cookies/:id", adminHandler.UpdateCookie)
@@ -366,7 +511,9 @@ func mountInstalledRoutes(runtimeCtx context.Context, router *gin.Engine, cfg co
 		adminRoutes.PATCH("/user-groups/:id", middleware.SuperAdminOnly(), userAdminHandler.UpdateUserGroup)
 		adminRoutes.DELETE("/user-groups/:id", middleware.SuperAdminOnly(), userAdminHandler.DeleteUserGroup)
 	}
+	logInitDone("后台管理路由")
 
+	logInitStart("用户中心路由")
 	userRoutes := router.Group("/api/user")
 	userRoutes.Use(middleware.RequireInstalled(state), middleware.JWTAuth(jwtMgr, db))
 	{
@@ -374,6 +521,8 @@ func mountInstalledRoutes(runtimeCtx context.Context, router *gin.Engine, cfg co
 		userRoutes.GET("/quota/today", userHandler.QuotaToday)
 		userRoutes.GET("/usage/trend", userHandler.UsageTrend)
 	}
+	logInitDone("用户中心路由")
+
 	return db, nil
 }
 
@@ -387,17 +536,17 @@ func notInstalled(c *gin.Context) {
 func mountFrontendRoutes(router *gin.Engine, distDir string, state *middleware.InstallState) {
 	if embeddedFS, ok := loadEmbeddedFrontend(); ok {
 		if err := mountFrontendRoutesFromFS(router, embeddedFS, state); err == nil {
-			log.Printf("serving embedded frontend dist")
+			log.Printf("✅ 已启用内嵌前端静态资源")
 			return
 		}
 	}
 
 	indexFile := filepath.Join(distDir, "index.html")
 	if _, err := os.Stat(indexFile); err != nil {
-		log.Printf("frontend dist not found at %s, skip static routes", distDir)
+		log.Printf("⚠️ 未找到前端构建产物：%s，已跳过静态资源路由", distDir)
 		return
 	}
-	log.Printf("serving frontend dist from %s", distDir)
+	log.Printf("✅ 前端静态资源目录已挂载：%s", distDir)
 
 	router.NoRoute(func(c *gin.Context) {
 		requestPath := c.Request.URL.Path

@@ -25,15 +25,15 @@ import (
 )
 
 const (
-	cacheTTLParseLink    = 2 * time.Minute
-	cacheTTLSongDetail   = 20 * time.Minute
-	cacheTTLSearch       = 20 * time.Minute
-	cacheTTLPlaylist     = 20 * time.Minute
-	cacheTTLLyric        = 6 * time.Hour
-	playlistDetailChunk  = 500
-	defaultParseQuality  = "standard"
-	maxResponseBodySize  = 10 << 20 // 10 MB
-	maxCoverBodySize     = 20 << 20 // 20 MB
+	cacheTTLParseLink   = 2 * time.Minute
+	cacheTTLSongDetail  = 20 * time.Minute
+	cacheTTLSearch      = 20 * time.Minute
+	cacheTTLPlaylist    = 20 * time.Minute
+	cacheTTLLyric       = 6 * time.Hour
+	playlistDetailChunk = 500
+	defaultParseQuality = "standard"
+	maxResponseBodySize = 10 << 20 // 10 MB
+	maxCoverBodySize    = 20 << 20 // 20 MB
 )
 
 type ParseResult struct {
@@ -103,6 +103,10 @@ type ParseService struct {
 	httpMu         sync.RWMutex
 	httpClient     *http.Client
 	httpProxyURL   string // track current proxy config to detect changes
+	cookieMu       sync.Mutex
+	cookiePool     []activeCookieItem
+	cookieCursor   int
+	cookiePoolExp  time.Time
 }
 
 func NewParseService(db *gorm.DB, settingSvc *SettingService, box *security.SecretBox) *ParseService {
@@ -155,11 +159,13 @@ func (s *ParseService) ParseNetease(ctx context.Context, userID uint, requestIP,
 	}
 
 	if cached, ok, err := s.getCache(ctx, cacheKey); err == nil && ok {
+		streamURL := normalizeExternalMediaURL(cached)
+		coverURL := normalizeExternalMediaURL(meta.CoverURL)
 		result := ParseResult{
 			Provider:    "netease",
 			SongID:      songID,
 			Quality:     level,
-			StreamURL:   cached,
+			StreamURL:   streamURL,
 			CacheHit:    true,
 			SongName:    meta.SongName,
 			ArtistName:  meta.ArtistName,
@@ -169,17 +175,19 @@ func (s *ParseService) ParseNetease(ctx context.Context, userID uint, requestIP,
 			TrackNumber: meta.TrackNumber,
 			TrackTotal:  meta.TrackTotal,
 			DiscNumber:  meta.DiscNumber,
-			CoverURL:    meta.CoverURL,
+			CoverURL:    coverURL,
 		}
-		_ = s.recordParse(userID, requestIP, sourceURL, cached, level, true, "success")
+		_ = s.recordParse(userID, requestIP, sourceURL, streamURL, level, true, "success")
 		return &result, nil
 	}
 
-	link, err := s.fetchNeteaseLink(ctx, songID, level)
+	link, err := s.fetchNeteaseLinkWithCookieRetry(ctx, songID, level)
 	if err != nil {
 		_ = s.recordParse(userID, requestIP, sourceURL, "", level, false, "failed")
 		return nil, err
 	}
+	link = normalizeExternalMediaURL(link)
+	coverURL := normalizeExternalMediaURL(meta.CoverURL)
 	_ = s.setCache(ctx, cacheKey, link, cacheTTLParseLink)
 	_ = s.recordParse(userID, requestIP, sourceURL, link, level, false, "success")
 	return &ParseResult{
@@ -196,7 +204,7 @@ func (s *ParseService) ParseNetease(ctx context.Context, userID uint, requestIP,
 		TrackNumber: meta.TrackNumber,
 		TrackTotal:  meta.TrackTotal,
 		DiscNumber:  meta.DiscNumber,
-		CoverURL:    meta.CoverURL,
+		CoverURL:    coverURL,
 	}, nil
 }
 

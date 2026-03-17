@@ -11,6 +11,11 @@ body,
   min-height: 100%;
 }
 
+html {
+  /* Keep layout width stable when vertical scrollbar appears/disappears. */
+  scrollbar-gutter: stable;
+}
+
 body {
   font-family: "Zhuque Fangsong (technical preview)", "Manrope", "Noto Sans SC", "Segoe UI", sans-serif;
   color: var(--text-1);
@@ -19,6 +24,21 @@ body {
     radial-gradient(42rem 36rem at 100% 0%, #ffe7d8 0%, transparent 52%),
     linear-gradient(155deg, var(--bg-1), var(--bg-2) 58%, var(--bg-3));
   transition: background 0.35s ease, color 0.25s ease;
+}
+
+html.home-page-no-scrollbar,
+body.home-page-no-scrollbar {
+  overflow: hidden;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+  overscroll-behavior: none;
+}
+
+html.home-page-no-scrollbar::-webkit-scrollbar,
+body.home-page-no-scrollbar::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+  display: none;
 }
 
 [data-theme="dark"] body {
